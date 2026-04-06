@@ -11,12 +11,12 @@
  *   npx tsx scripts/ollero-cli.ts ask "explica src/repl/mod.rs"
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { exec as execCb } from "node:child_process";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { exec as execCb, execFile as execFileCb } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
-type Command = "list" | "show" | "run" | "ask" | "help";
+type Command = "list" | "show" | "run" | "ask" | "gen-prompts" | "help";
 
 type Task = {
   id: string;
@@ -35,8 +35,27 @@ type CliOptions = {
   autonomous: boolean;
   allowBash: boolean;
   allowWeb: boolean;
+  allowFs: boolean;
   maxRounds: number;
   cmdTimeoutMs: number;
+  llmTimeoutMs: number;
+  keepRuns: number;
+  verbose: boolean;
+  readyToken?: string;
+  batchFile?: string;
+  continueOnError: boolean;
+  promptsOut: string;
+  promptCount: number;
+  autoRecoverOllama: boolean;
+  ollamaRestartCmd?: string;
+  ollamaRecoverRetries: number;
+};
+
+type RunOutcome = {
+  ok: boolean;
+  finalText: string;
+  analysisWarnings: string[];
+  messages: ChatMessage[];
 };
 
 const DEFAULT_MODEL = "qwen3.5:9b";
@@ -45,8 +64,15 @@ const DEFAULT_TASKS_FILE = "TASKS_OLLERO_TOOL_ACTIONS.md";
 const DEFAULT_OUT_DIR = ".ollero-cli/runs";
 const DEFAULT_MAX_ROUNDS = 10;
 const DEFAULT_CMD_TIMEOUT_MS = 60_000;
+const DEFAULT_LLM_TIMEOUT_MS = 90_000;
+const DEFAULT_KEEP_RUNS = 20;
+const MAX_TOOL_OUTPUT_CHARS = 12_000;
+const DEFAULT_PROMPTS_OUT = "validation/generated-prompts.txt";
+const DEFAULT_PROMPT_COUNT = 8;
+const DEFAULT_OLLAMA_RECOVER_RETRIES = 2;
 
 const execAsync = promisify(execCb);
+const execFileAsync = promisify(execFileCb);
 
 type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -85,6 +111,13 @@ const AUTONOMOUS_SYSTEM_PROMPT = [
   "You are allowed to execute shell commands and use internet tools.",
   "Use tools when they are necessary to complete the task with evidence.",
   "Do not ask for confirmation before using tools.",
+  "The runtime OS is Windows.",
+  "For shell actions, use Windows PowerShell syntax only.",
+  "Avoid Unix-only commands like find/head/pwd/command -v.",
+  "Use equivalents like Get-ChildItem, Select-Object -First, Get-Location.",
+  "You can read and edit files inside the current workspace using file tools.",
+  "Prefer targeted edits: read_file -> replace_in_file/write_file -> verify with shell.",
+  "Always respond in English.",
   "Keep actions focused and return a concise final answer with what you executed.",
 ].join(" ");
 
@@ -120,8 +153,25 @@ function parseArgs(argv: string[]) {
     autonomous: flags.has("autonomous"),
     allowBash: flags.has("autonomous") || flags.has("allow-bash"),
     allowWeb: flags.has("autonomous") || flags.has("allow-web"),
+    allowFs: flags.has("autonomous") || flags.has("allow-fs"),
     maxRounds: Number(flags.get("max-rounds") ?? DEFAULT_MAX_ROUNDS),
     cmdTimeoutMs: Number(flags.get("cmd-timeout-ms") ?? DEFAULT_CMD_TIMEOUT_MS),
+    llmTimeoutMs: Number(flags.get("llm-timeout-ms") ?? DEFAULT_LLM_TIMEOUT_MS),
+    keepRuns: Number(flags.get("keep-runs") ?? DEFAULT_KEEP_RUNS),
+    verbose: flags.has("verbose") || flags.has("autonomous"),
+    readyToken: typeof flags.get("ready-token") === "string" ? String(flags.get("ready-token")) : undefined,
+    batchFile: typeof flags.get("batch-file") === "string" ? String(flags.get("batch-file")) : undefined,
+    continueOnError: !flags.has("stop-on-error"),
+    promptsOut: String(flags.get("prompts-out") ?? DEFAULT_PROMPTS_OUT),
+    promptCount: Number(flags.get("prompt-count") ?? DEFAULT_PROMPT_COUNT),
+    autoRecoverOllama: !flags.has("no-ollama-recover"),
+    ollamaRestartCmd:
+      typeof flags.get("ollama-restart-cmd") === "string"
+        ? String(flags.get("ollama-restart-cmd"))
+        : undefined,
+    ollamaRecoverRetries: Number(
+      flags.get("ollama-recover-retries") ?? DEFAULT_OLLAMA_RECOVER_RETRIES,
+    ),
   };
 
   return { command, positional, options };
@@ -137,6 +187,7 @@ function printHelp() {
       "  show <TASK_ID>               Show task title and prompt",
       "  run <TASK_ID> [--dry-run]    Send task prompt to Ollama",
       "  ask \"<prompt>\"               Send a direct prompt to Ollama",
+      "  gen-prompts                   Ask Ollama to generate validation prompts from git changes",
       "  help                         Show this message",
       "",
       "Flags:",
@@ -148,11 +199,39 @@ function printHelp() {
       "  --autonomous     Enable autonomous tool loop (bash + web tools)",
       "  --allow-bash     Allow shell commands without full autonomous mode",
       "  --allow-web      Allow internet tools without full autonomous mode",
+      "  --allow-fs       Allow file read/write/edit tools",
       `  --max-rounds <n> Default: ${DEFAULT_MAX_ROUNDS}`,
       `  --cmd-timeout-ms Default: ${DEFAULT_CMD_TIMEOUT_MS}`,
+      `  --llm-timeout-ms Default: ${DEFAULT_LLM_TIMEOUT_MS}`,
+      `  --keep-runs <n>  Default: ${DEFAULT_KEEP_RUNS} (log retention)`,
+      "  --verbose        Show step-by-step execution logs",
+      "  --ready-token <t> Require final answer to include token, else exits non-zero",
+      "  --batch-file <p> Run many prompts sequentially (ask mode)",
+      "  --stop-on-error  Stop batch execution on first failure",
+      `  --prompts-out <p> Default: ${DEFAULT_PROMPTS_OUT}`,
+      `  --prompt-count <n> Default: ${DEFAULT_PROMPT_COUNT}`,
+      "  --no-ollama-recover Disable automatic Ollama recovery",
+      "  --ollama-restart-cmd <cmd> Optional command to restart Ollama process/service",
+      `  --ollama-recover-retries <n> Default: ${DEFAULT_OLLAMA_RECOVER_RETRIES}`,
       "  --dry-run        Print request without sending",
     ].join("\n"),
   );
+}
+
+function logStep(options: CliOptions, message: string): void {
+  if (!options.verbose) return;
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${message}`);
+}
+
+function resolveWorkspacePath(inputPath: string): string {
+  const base = process.cwd();
+  const resolved = path.resolve(base, inputPath);
+  const rel = path.relative(base, resolved);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("Path escapes workspace root.");
+  }
+  return resolved;
 }
 
 async function loadTasks(tasksFile: string): Promise<Task[]> {
@@ -175,6 +254,336 @@ async function loadTasks(tasksFile: string): Promise<Task[]> {
   return tasks;
 }
 
+function parseBatchPrompts(raw: string): string[] {
+  const separators = /\r?\n---\r?\n/g;
+  if (separators.test(raw)) {
+    return raw
+      .split(separators)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return raw
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+function analyzeResponseIssues(finalText: string): string[] {
+  const warnings: string[] = [];
+  const t = finalText.toLowerCase();
+  const patterns: Array<[RegExp, string]> = [
+    [/i cannot execute/i, "Model claims it cannot execute commands."],
+    [/i don't have (the )?ability to interact with terminal/i, "Model claims no terminal capability."],
+    [/would you like me to provide/i, "Model drifted into generic advisory mode."],
+    [/as an ai assistant/i, "Model produced generic assistant disclaimer."],
+    [/does not exist in the current workspace/i, "Model used incorrect workspace path."],
+    [/path .* does not exist/i, "Model reported path-not-found."],
+    [/no files were found or modified/i, "Model did not perform requested file updates."],
+  ];
+  for (const [re, label] of patterns) {
+    if (re.test(t)) warnings.push(label);
+  }
+  return warnings;
+}
+
+async function loadBatchPrompts(filePath: string): Promise<string[]> {
+  const full = resolveWorkspacePath(filePath);
+  const raw = await readFile(full, "utf8");
+  const prompts = parseBatchPrompts(raw);
+  if (!prompts.length) {
+    throw new Error(`No prompts found in batch file: ${filePath}`);
+  }
+  return prompts;
+}
+
+async function collectGitContext(options: CliOptions): Promise<string> {
+  const status = await runBash("git status --short", options.cmdTimeoutMs);
+  const diff = await runBash("git diff", options.cmdTimeoutMs);
+  const staged = await runBash("git diff --cached", options.cmdTimeoutMs);
+  const log = await runBash("git log --oneline -10", options.cmdTimeoutMs);
+  return [
+    "## git status --short",
+    status,
+    "",
+    "## git diff",
+    clipOutput(diff, 20_000),
+    "",
+    "## git diff --cached",
+    clipOutput(staged, 20_000),
+    "",
+    "## git log --oneline -10",
+    log,
+  ].join("\n");
+}
+
+async function pingOllama(baseUrl: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl}/api/tags`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function listRunningOllamaModels(baseUrl: string): Promise<string[]> {
+  try {
+    const res = await fetch(`${baseUrl}/api/ps`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: Array<{ name?: string }> };
+    return (data.models ?? [])
+      .map((m) => String(m.name ?? "").trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function unloadModelViaApi(baseUrl: string, model: string): Promise<void> {
+  // keep_alive: 0 asks Ollama to unload the model from memory.
+  const payload = {
+    model,
+    prompt: "",
+    stream: false,
+    keep_alive: 0,
+  };
+  const res = await fetch(`${baseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Failed to unload model '${model}': ${res.status} ${body}`);
+  }
+}
+
+async function recoverOllama(options: CliOptions, reason: string): Promise<void> {
+  logStep(options, `ollama recover start: ${reason}`);
+
+  const running = await listRunningOllamaModels(options.url);
+  if (running.length > 0) {
+    logStep(options, `ollama recover: unloading ${running.length} model(s) via API`);
+  }
+  for (const model of running) {
+    try {
+      await unloadModelViaApi(options.url, model);
+      logStep(options, `ollama recover: unloaded ${model}`);
+    } catch (err) {
+      logStep(
+        options,
+        `ollama recover: unload failed for ${model}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  // Optional hard restart hook if user provides a platform-specific command.
+  if (options.ollamaRestartCmd) {
+    try {
+      logStep(options, `ollama recover: restart command -> ${options.ollamaRestartCmd}`);
+      await runBash(options.ollamaRestartCmd, options.cmdTimeoutMs);
+    } catch (err) {
+      logStep(
+        options,
+        `ollama recover: restart command failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  // Wait briefly and verify health.
+  for (let i = 0; i < 5; i += 1) {
+    if (await pingOllama(options.url)) {
+      logStep(options, "ollama recover: health check OK");
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("Ollama recovery failed: health check did not recover.");
+}
+
+async function callOllamaWithRetry(
+  options: CliOptions,
+  messages: ChatMessage[],
+  tools?: ToolDefinition[],
+  retries = 3,
+): Promise<ChatResponse> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      return await callOllama(
+        options.url,
+        options.model,
+        messages,
+        tools,
+        options.llmTimeoutMs,
+      );
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      logStep(options, `ollama retry ${attempt}/${retries} failed: ${msg}`);
+      if (options.autoRecoverOllama && attempt <= options.ollamaRecoverRetries) {
+        try {
+          await recoverOllama(options, `request failure: ${msg}`);
+        } catch (recoverErr) {
+          logStep(
+            options,
+            `ollama recover failed: ${
+              recoverErr instanceof Error ? recoverErr.message : String(recoverErr)
+            }`,
+          );
+        }
+      }
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
+function normalizeGeneratedPrompts(raw: string): string {
+  const cleaned = raw
+    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```[a-zA-Z]*/g, "").replace(/```/g, ""))
+    .trim();
+  if (!cleaned) return "";
+  const blocks = cleaned
+    .split(/\r?\n---\r?\n/g)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (!blocks.length) return "";
+  return `${blocks.join("\n---\n")}\n`;
+}
+
+function parseGeneratedPrompts(raw: string): string[] {
+  return normalizeGeneratedPrompts(raw)
+    .split(/\r?\n---\r?\n/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function validateGeneratedPrompts(prompts: string[], minCount: number): string[] {
+  const problems: string[] = [];
+  if (prompts.length < minCount) {
+    problems.push(`Expected at least ${minCount} prompts, got ${prompts.length}.`);
+  }
+  const badPatterns = [
+    /as an ai assistant/i,
+    /would you like/i,
+    /siguientes pasos/i,
+    /resumen del estado/i,
+    /git commit/i,
+    /tabla|table/i,
+  ];
+  prompts.forEach((p, idx) => {
+    if (p.length < 40) problems.push(`Prompt ${idx + 1} is too short.`);
+    if (!/(work|validate|run|check|edit|update|test)/i.test(p)) {
+      problems.push(`Prompt ${idx + 1} lacks actionable validation verbs.`);
+    }
+    if (badPatterns.some((re) => re.test(p))) {
+      problems.push(`Prompt ${idx + 1} contains advisory/report style text.`);
+    }
+  });
+  return problems;
+}
+
+async function generateValidationPrompts(options: CliOptions): Promise<void> {
+  logStep(options, "collecting git context for prompt generation");
+  const gitContext = await collectGitContext(options);
+  const attempts = [
+    [
+      "You generate high-signal validation prompts for autonomous code agents.",
+      "Always respond in English.",
+      "Output only prompt blocks separated by a line containing exactly ---",
+      "No markdown, no headers, no tables, no explanations, no code fences.",
+      "Each block must be one executable prompt.",
+    ].join(" "),
+    [
+      "STRICT MODE.",
+      "Return ONLY plain text prompts separated by ---.",
+      "No intro, no outro, no bullets, no markdown.",
+      "Each prompt must start with an imperative verb (Analyze, Validate, Edit, Run, Check, Update).",
+    ].join(" "),
+  ];
+
+  let acceptedPrompts: string[] = [];
+  let lastProblems: string[] = [];
+  for (let i = 0; i < attempts.length; i += 1) {
+    const messages: ChatMessage[] = [
+      { role: "system", content: attempts[i] },
+      {
+        role: "user",
+        content: [
+          `Based on this repository git context, generate ${options.promptCount} validation prompts.`,
+          "Prompts must test: analysis quality, concrete file edits, command execution, follow-up updates, and regression safety.",
+          "Prefer prompts that can be run sequentially in shared session mode.",
+          "",
+          gitContext,
+        ].join("\n"),
+      },
+    ];
+    const result = await callOllamaWithRetry(options, messages, undefined, 3);
+    const raw = result.message?.content ?? "";
+    const prompts = parseGeneratedPrompts(raw);
+    const problems = validateGeneratedPrompts(prompts, options.promptCount);
+    if (problems.length === 0) {
+      acceptedPrompts = prompts;
+      break;
+    }
+    lastProblems = problems;
+    logStep(options, `gen-prompts attempt ${i + 1} rejected: ${problems.join(" | ")}`);
+  }
+
+  if (!acceptedPrompts.length) {
+    logStep(options, "falling back to iterative one-prompt generation");
+    const iterative: string[] = [];
+    for (let i = 0; i < options.promptCount; i += 1) {
+      const used = iterative.map((p, n) => `${n + 1}. ${p}`).join("\n");
+      const messages: ChatMessage[] = [
+        {
+          role: "system",
+          content: [
+            "Generate exactly one validation prompt in English.",
+            "Output only the prompt text (no markdown, no quotes, no bullets).",
+            "Start with an imperative verb: Analyze, Validate, Edit, Run, Check, or Update.",
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: [
+            `Generate prompt ${i + 1} of ${options.promptCount}.`,
+            "Use current git context and make it executable for this repository.",
+            "Avoid duplicates with previous prompts.",
+            used ? `Previous prompts:\n${used}` : "Previous prompts: (none)",
+            "",
+            gitContext,
+          ].join("\n"),
+        },
+      ];
+      const result = await callOllamaWithRetry(options, messages, undefined, 3);
+      const candidate = (result.message?.content ?? "").trim().replace(/\r?\n+/g, " ");
+      const candidateProblems = validateGeneratedPrompts([candidate], 1);
+      if (candidateProblems.length === 0) {
+        iterative.push(candidate);
+      } else {
+        const fallbackPrompt =
+          "Validate the latest Rust changes by checking modified files, running cargo check and cargo test where applicable, and report pass/fail with concrete evidence.";
+        iterative.push(fallbackPrompt);
+      }
+    }
+    acceptedPrompts = iterative;
+  }
+  const normalized = `${acceptedPrompts.join("\n---\n")}\n`;
+
+  const outPath = resolveWorkspacePath(options.promptsOut);
+  await mkdir(path.dirname(outPath), { recursive: true });
+  await writeFile(outPath, normalized, "utf8");
+  console.log(`Generated prompts saved to: ${options.promptsOut}`);
+  console.log(`Prompt count: ${acceptedPrompts.length}`);
+}
+
 function requireTask(tasks: Task[], id: string): Task {
   const task = tasks.find((t) => t.id.toLowerCase() === id.toLowerCase());
   if (!task) {
@@ -191,13 +600,27 @@ async function callOllama(
   model: string,
   messages: ChatMessage[],
   tools?: ToolDefinition[],
+  timeoutMs = DEFAULT_LLM_TIMEOUT_MS,
 ): Promise<ChatResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, timeoutMs));
   const payload = { model, stream: false, messages, tools };
-  const response = await fetch(`${url}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(`Ollama request timed out after ${timeoutMs} ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!response.ok) {
     const body = await response.text();
@@ -217,6 +640,25 @@ async function saveRun(outDir: string, name: string, text: string) {
   const full = path.join(outDir, filename);
   await writeFile(full, text, "utf8");
   return full;
+}
+
+async function pruneOldRuns(outDir: string, keepRuns: number): Promise<number> {
+  const keep = Math.max(1, keepRuns);
+  const entries = await readdir(outDir);
+  const files = entries.filter((f) => f.toLowerCase().endsWith(".md"));
+  if (files.length <= keep) return 0;
+
+  const dated = await Promise.all(
+    files.map(async (file) => {
+      const full = path.join(outDir, file);
+      const s = await stat(full);
+      return { full, mtimeMs: s.mtimeMs };
+    }),
+  );
+  dated.sort((a, b) => b.mtimeMs - a.mtimeMs); // newest first
+  const toDelete = dated.slice(keep);
+  await Promise.all(toDelete.map((f) => rm(f.full, { force: true })));
+  return toDelete.length;
 }
 
 function toolsForOptions(options: CliOptions): ToolDefinition[] {
@@ -267,6 +709,53 @@ function toolsForOptions(options: CliOptions): ToolDefinition[] {
       },
     });
   }
+  if (options.allowFs) {
+    tools.push({
+      type: "function",
+      function: {
+        name: "read_file",
+        description: "Read a UTF-8 text file from the workspace.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
+          required: ["path"],
+        },
+      },
+    });
+    tools.push({
+      type: "function",
+      function: {
+        name: "write_file",
+        description: "Write UTF-8 content to a file in workspace (overwrite).",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            content: { type: "string" },
+          },
+          required: ["path", "content"],
+        },
+      },
+    });
+    tools.push({
+      type: "function",
+      function: {
+        name: "replace_in_file",
+        description: "Replace one exact string in a UTF-8 file in workspace.",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            old_string: { type: "string" },
+            new_string: { type: "string" },
+          },
+          required: ["path", "old_string", "new_string"],
+        },
+      },
+    });
+  }
   return tools;
 }
 
@@ -279,14 +768,28 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
+function clipOutput(text: string, maxChars = MAX_TOOL_OUTPUT_CHARS): string {
+  if (text.length <= maxChars) return text;
+  return (
+    text.slice(0, maxChars) +
+    `\n\n... [truncated ${text.length - maxChars} chars to limit token usage]`
+  );
+}
+
 async function runBash(command: string, timeoutMs: number): Promise<string> {
-  const { stdout, stderr } = await execAsync(command, {
-    shell: true,
-    timeout: timeoutMs,
-    maxBuffer: 1024 * 1024 * 4,
-  });
+  const isWindows = process.platform === "win32";
+  const { stdout, stderr } = isWindows
+    ? await execFileAsync("powershell", ["-NoProfile", "-Command", command], {
+        timeout: timeoutMs,
+        maxBuffer: 1024 * 1024 * 8,
+      })
+    : await execAsync(command, {
+        shell: true,
+        timeout: timeoutMs,
+        maxBuffer: 1024 * 1024 * 8,
+      });
   const out = [stdout, stderr].filter(Boolean).join("");
-  return out.trim() || "(no output)";
+  return clipOutput(out.trim() || "(no output)");
 }
 
 function stripHtmlTags(html: string): string {
@@ -321,9 +824,9 @@ async function webSearch(query: string): Promise<string> {
   }
   if (items.length === 0) {
     const fallback = stripHtmlTags(html).slice(0, 1200);
-    return `No structured results parsed.\n${fallback}`;
+    return clipOutput(`No structured results parsed.\n${fallback}`);
   }
-  return items.join("\n");
+  return clipOutput(items.join("\n"));
 }
 
 async function webFetch(url: string): Promise<string> {
@@ -336,7 +839,36 @@ async function webFetch(url: string): Promise<string> {
     throw new Error(`web_fetch failed (${response.status})`);
   }
   const text = await response.text();
-  return stripHtmlTags(text).slice(0, 5000);
+  return clipOutput(stripHtmlTags(text).slice(0, 5000));
+}
+
+async function readTextFileInWorkspace(inputPath: string): Promise<string> {
+  const fullPath = resolveWorkspacePath(inputPath);
+  const text = await readFile(fullPath, "utf8");
+  return clipOutput(text);
+}
+
+async function writeTextFileInWorkspace(inputPath: string, content: string): Promise<string> {
+  const fullPath = resolveWorkspacePath(inputPath);
+  await mkdir(path.dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, content, "utf8");
+  return `Wrote ${content.length} chars to ${inputPath}`;
+}
+
+async function replaceInFileInWorkspace(
+  inputPath: string,
+  oldString: string,
+  newString: string,
+): Promise<string> {
+  const fullPath = resolveWorkspacePath(inputPath);
+  const text = await readFile(fullPath, "utf8");
+  const index = text.indexOf(oldString);
+  if (index < 0) {
+    return "No change: old_string not found.";
+  }
+  const next = text.replace(oldString, newString);
+  await writeFile(fullPath, next, "utf8");
+  return `Replaced one occurrence in ${inputPath}`;
 }
 
 async function dispatchTool(
@@ -358,7 +890,9 @@ async function dispatchTool(
     if (!command.trim()) {
       return { name, output: "Error: missing 'command' argument." };
     }
+    logStep(options, `tool:bash start -> ${command}`);
     const output = await runBash(command, options.cmdTimeoutMs);
+    logStep(options, `tool:bash done (${output.length} chars)`);
     return { name, output };
   }
 
@@ -370,7 +904,10 @@ async function dispatchTool(
     if (!query.trim()) {
       return { name, output: "Error: missing 'query' argument." };
     }
-    return { name, output: await webSearch(query) };
+    logStep(options, `tool:web_search start -> ${query}`);
+    const output = await webSearch(query);
+    logStep(options, `tool:web_search done (${output.length} chars)`);
+    return { name, output };
   }
 
   if (name === "web_fetch") {
@@ -381,7 +918,55 @@ async function dispatchTool(
     if (!url.trim()) {
       return { name, output: "Error: missing 'url' argument." };
     }
-    return { name, output: await webFetch(url) };
+    logStep(options, `tool:web_fetch start -> ${url}`);
+    const output = await webFetch(url);
+    logStep(options, `tool:web_fetch done (${output.length} chars)`);
+    return { name, output };
+  }
+
+  if (name === "read_file") {
+    if (!options.allowFs) {
+      return { name, output: "Permission denied: fs tools are disabled." };
+    }
+    const filePath = String(argsObj.path ?? "");
+    if (!filePath.trim()) {
+      return { name, output: "Error: missing 'path' argument." };
+    }
+    logStep(options, `tool:read_file start -> ${filePath}`);
+    const output = await readTextFileInWorkspace(filePath);
+    logStep(options, `tool:read_file done (${output.length} chars)`);
+    return { name, output };
+  }
+
+  if (name === "write_file") {
+    if (!options.allowFs) {
+      return { name, output: "Permission denied: fs tools are disabled." };
+    }
+    const filePath = String(argsObj.path ?? "");
+    const content = String(argsObj.content ?? "");
+    if (!filePath.trim()) {
+      return { name, output: "Error: missing 'path' argument." };
+    }
+    logStep(options, `tool:write_file start -> ${filePath}`);
+    const output = await writeTextFileInWorkspace(filePath, content);
+    logStep(options, "tool:write_file done");
+    return { name, output };
+  }
+
+  if (name === "replace_in_file") {
+    if (!options.allowFs) {
+      return { name, output: "Permission denied: fs tools are disabled." };
+    }
+    const filePath = String(argsObj.path ?? "");
+    const oldString = String(argsObj.old_string ?? "");
+    const newString = String(argsObj.new_string ?? "");
+    if (!filePath.trim() || !oldString) {
+      return { name, output: "Error: missing 'path' or 'old_string' argument." };
+    }
+    logStep(options, `tool:replace_in_file start -> ${filePath}`);
+    const output = await replaceInFileInWorkspace(filePath, oldString, newString);
+    logStep(options, "tool:replace_in_file done");
+    return { name, output };
   }
 
   return { name, output: `Unknown tool: ${name}` };
@@ -391,26 +976,42 @@ async function runPrompt(
   userPrompt: string,
   runName: string,
   options: CliOptions,
-): Promise<void> {
+  sessionMessages?: ChatMessage[],
+): Promise<RunOutcome> {
+  logStep(options, `run start -> ${runName}`);
   const tools = toolsForOptions(options);
-  const messages: ChatMessage[] = [];
+  const messages: ChatMessage[] = sessionMessages ? [...sessionMessages] : [];
   const systemPrompt =
     options.system ??
     (options.autonomous
       ? AUTONOMOUS_SYSTEM_PROMPT
       : undefined);
+  const systemPromptWithReady =
+    options.readyToken && systemPrompt
+      ? `${systemPrompt}\nWhen all requested work is complete and validated, include this exact token in your final answer: ${options.readyToken}`
+      : options.readyToken
+        ? `When all requested work is complete and validated, include this exact token in your final answer: ${options.readyToken}`
+        : systemPrompt;
+  const workspaceConstrainedPrompt = [
+    systemPromptWithReady ?? "",
+    `Workspace root is: ${process.cwd()}`,
+    "All file paths must be relative to this workspace root.",
+    "Do not use /workspace paths unless they truly exist in this environment.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  if (systemPrompt) {
-    messages.push({ role: "system", content: systemPrompt });
+  if (workspaceConstrainedPrompt && messages.length === 0) {
+    messages.push({ role: "system", content: workspaceConstrainedPrompt });
   }
   messages.push({ role: "user", content: userPrompt });
 
   if (options.dryRun) {
     console.log(
-      `[dry-run] model=${options.model} url=${options.url} autonomous=${options.autonomous} allowBash=${options.allowBash} allowWeb=${options.allowWeb}`,
+      `[dry-run] model=${options.model} url=${options.url} autonomous=${options.autonomous} allowBash=${options.allowBash} allowWeb=${options.allowWeb} allowFs=${options.allowFs}`,
     );
     console.log(userPrompt);
-    return;
+    return { ok: true, finalText: userPrompt, analysisWarnings: [], messages };
   }
 
   const trace: string[] = [];
@@ -420,7 +1021,13 @@ async function runPrompt(
   let totalToolCalls = 0;
 
   for (let round = 1; round <= Math.max(1, options.maxRounds); round += 1) {
-    const result = await callOllama(options.url, options.model, messages, tools.length ? tools : undefined);
+    logStep(options, `round ${round}: calling model ${options.model}`);
+    const result = await callOllamaWithRetry(
+      options,
+      messages,
+      tools.length ? tools : undefined,
+      3,
+    );
     totalPrompt += result.prompt_eval_count ?? 0;
     totalCompletion += result.eval_count ?? 0;
 
@@ -429,19 +1036,38 @@ async function runPrompt(
     messages.push({ role: "assistant", content: assistantContent, tool_calls: toolCalls });
 
     if (assistantContent.trim()) {
+      logStep(options, `round ${round}: assistant text (${assistantContent.length} chars)`);
       finalText = assistantContent;
       trace.push(`## Assistant round ${round}\n\n${assistantContent}\n`);
     }
 
     if (!toolCalls.length) {
+      logStep(options, `round ${round}: no tool calls, stopping loop`);
       break;
     }
 
+    logStep(options, `round ${round}: received ${toolCalls.length} tool call(s)`);
     totalToolCalls += toolCalls.length;
     trace.push(`## Tool calls round ${round}\n\n${stringifyUnknown(toolCalls)}\n`);
 
     for (const call of toolCalls) {
       try {
+        if (
+          options.readyToken &&
+          call.function.name === "write_file" &&
+          typeof call.function.arguments === "object" &&
+          call.function.arguments !== null &&
+          String((call.function.arguments as Record<string, unknown>).path ?? "") === options.readyToken
+        ) {
+          const blocked = `Blocked unsafe write_file target equal to ready token: ${options.readyToken}`;
+          trace.push(`### Tool write_file\n\n${blocked}\n`);
+          messages.push({
+            role: "tool",
+            tool_name: "write_file",
+            content: blocked,
+          });
+          continue;
+        }
         const { name, output } = await dispatchTool(call, options);
         trace.push(`### Tool ${name}\n\n${output}\n`);
         messages.push({
@@ -460,6 +1086,24 @@ async function runPrompt(
           content: output,
         });
       }
+    }
+  }
+
+  // Guarantee a final user-facing answer even if we hit max rounds with only tool calls.
+  if (!finalText.trim()) {
+    logStep(options, "forcing final synthesis without tools");
+    messages.push({
+      role: "user",
+      content:
+        "Provide the final answer now in English. Do not call any tools. Summarize findings concisely.",
+    });
+    const finalResult = await callOllamaWithRetry(options, messages, undefined, 3);
+    totalPrompt += finalResult.prompt_eval_count ?? 0;
+    totalCompletion += finalResult.eval_count ?? 0;
+    finalText = finalResult.message?.content ?? "";
+    if (finalText.trim()) {
+      logStep(options, `final synthesis received (${finalText.length} chars)`);
+      trace.push(`## Assistant final synthesis\n\n${finalText}\n`);
     }
   }
 
@@ -490,6 +1134,7 @@ async function runPrompt(
       `- autonomous: ${options.autonomous}`,
       `- allow_bash: ${options.allowBash}`,
       `- allow_web: ${options.allowWeb}`,
+      `- allow_fs: ${options.allowFs}`,
       "",
       "## Trace",
       "",
@@ -497,22 +1142,98 @@ async function runPrompt(
     ].join("\n"),
   );
   console.log(`Saved: ${saved}`);
+  logStep(options, `run saved -> ${saved}`);
+  const pruned = await pruneOldRuns(options.outDir, options.keepRuns);
+  if (pruned > 0) {
+    console.log(`Pruned old runs: ${pruned} (keep-runs=${Math.max(1, options.keepRuns)})`);
+    logStep(options, `old runs pruned -> ${pruned}`);
+  }
+  logStep(options, `run end -> ${runName}`);
+  const analysisWarnings = analyzeResponseIssues(finalText);
+  if (analysisWarnings.length > 0) {
+    logStep(options, `response analysis warnings -> ${analysisWarnings.join(" | ")}`);
+  }
+  let ok = true;
+  if (options.readyToken) {
+    const ready = finalText.includes(options.readyToken);
+    if (!ready) {
+      logStep(options, `ready token missing -> ${options.readyToken}`);
+      console.error(
+        `Ready token not found in final response. Token required: ${options.readyToken}`,
+      );
+      ok = false;
+    } else {
+      logStep(options, `ready token detected -> ${options.readyToken}`);
+    }
+  }
+  return { ok, finalText, analysisWarnings, messages };
 }
 
 async function main() {
   const { command, positional, options } = parseArgs(process.argv.slice(2));
 
-  if (command === "help" || !["list", "show", "run", "ask", "help"].includes(command)) {
+  if (command === "help" || !["list", "show", "run", "ask", "gen-prompts", "help"].includes(command)) {
     printHelp();
     return;
   }
 
+  if (command === "gen-prompts") {
+    await generateValidationPrompts(options);
+    return;
+  }
+
   if (command === "ask") {
+    if (options.batchFile) {
+      const prompts = await loadBatchPrompts(options.batchFile);
+      console.log(`Batch mode: loaded ${prompts.length} prompt(s) from ${options.batchFile}`);
+      let failures = 0;
+      let warnings = 0;
+      let sessionMessages: ChatMessage[] = [];
+      for (let i = 0; i < prompts.length; i += 1) {
+        const prompt = prompts[i];
+        const runName = `ask-batch-${String(i + 1).padStart(2, "0")}`;
+        console.log(`\n===== Batch item ${i + 1}/${prompts.length} =====`);
+        try {
+          const outcome = await runPrompt(prompt, runName, options, sessionMessages);
+          sessionMessages = outcome.messages;
+          if (outcome.analysisWarnings.length > 0) {
+            warnings += 1;
+            console.error(
+              `Batch item ${i + 1} warnings: ${outcome.analysisWarnings.join(" | ")}`,
+            );
+          }
+          if (!outcome.ok) {
+            failures += 1;
+            console.error(`Batch item ${i + 1} failed readiness checks.`);
+            if (!options.continueOnError) {
+              process.exit(42);
+            }
+          }
+        } catch (err) {
+          failures += 1;
+          console.error(
+            `Batch item ${i + 1} error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          if (!options.continueOnError) {
+            process.exit(1);
+          }
+        }
+      }
+      console.log(
+        `\nBatch completed: total=${prompts.length}, failures=${failures}, warnings=${warnings}, continueOnError=${options.continueOnError}`,
+      );
+      if (failures > 0) {
+        process.exit(42);
+      }
+      return;
+    }
+
     const prompt = positional.join(" ").trim();
     if (!prompt) {
       throw new Error("ask requires a prompt string.");
     }
-    await runPrompt(prompt, "ask", options);
+    const outcome = await runPrompt(prompt, "ask", options);
+    if (!outcome.ok) process.exit(42);
     return;
   }
 
@@ -538,7 +1259,8 @@ async function main() {
   }
 
   if (command === "run") {
-    await runPrompt(task.prompt, task.id, options);
+    const outcome = await runPrompt(task.prompt, task.id, options);
+    if (!outcome.ok) process.exit(42);
     return;
   }
 }

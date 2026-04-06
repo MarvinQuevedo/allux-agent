@@ -77,7 +77,8 @@ const SOURCE_GLOBS: &[&str] = &[
     "**/jsconfig.json",
 ];
 
-/// True if the user message is asking for a broad read / status of the repo.
+/// Detect if the user is asking for a broad repository read/status request.
+/// Matches key phrases in both English and Spanish that imply file-level context is needed.
 pub fn should_trigger(msg: &str) -> bool {
     let m = msg.to_lowercase();
     let t = m.trim();
@@ -128,6 +129,9 @@ pub fn should_trigger(msg: &str) -> bool {
         "que contiene",
         "resume el proyecto",
         "resumen del proyecto",
+        "lectura completa del proyecto",
+        "lectura completa del repositorio",
+        "lectura completa del repo",
     ];
 
     TRIGGERS.iter().any(|p| t.contains(p))
@@ -143,6 +147,7 @@ fn should_list_path(path: &str) -> bool {
 }
 
 /// Collect paths from several globs, dedupe, filter noisy dirs, cap count.
+/// Uses BTreeSet for automatic sorting and deduplication.
 fn collect_source_paths(base: &str) -> String {
     let mut set: BTreeSet<String> = BTreeSet::new();
     let mut capped = false;

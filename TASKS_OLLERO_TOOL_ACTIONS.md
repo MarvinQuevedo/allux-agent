@@ -23,6 +23,7 @@ Trabajar en cambios pequenos, verificables y acumulables para mejorar `ollero` s
 - `--max-rounds <n>`: limita rondas de tool use (evita ciclos largos).
 - `--cmd-timeout-ms <n>`: timeout de comandos shell.
 - `--allow-bash` y `--allow-web`: permisos granulares si no quieres autonomia total.
+- `--verbose`: imprime logs paso a paso (rondas, tool calls, inicio/fin, guardado y pruning de corridas).
 
 ### Ejemplos
 - `node --experimental-strip-types scripts/ollero-cli.ts ask "diagnostica este repo" --autonomous`
