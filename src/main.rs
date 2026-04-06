@@ -1,3 +1,7 @@
+//! Ollero CLI binary.
+//!
+//! This binary provides the command-line interface for the Ollero tool.
+
 mod config;
 mod input;
 mod ollama;

@@ -26,7 +26,8 @@ type Options = {
 };
 
 const DEFAULTS: Options = {
-  model: "qwen3.5:9b",
+  // Prefer qwen3-coder:30b for self-edit quality; override with --model qwen3.5:9b for speed.
+  model: "qwen3-coder:30b",
   intervalMs: 1500,
   cycles: 0, // 0 = infinite
   maxRounds: 10,
