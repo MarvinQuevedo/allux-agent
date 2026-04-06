@@ -125,6 +125,7 @@ const AUTONOMOUS_SYSTEM_PROMPT = [
   "Do not ask for confirmation before using tools.",
   "The runtime OS is Windows.",
   "For shell actions, use Windows PowerShell syntax only.",
+  "Chained commands like cd path && cargo check are OK (the runtime runs them via cmd.exe on Windows).",
   "Avoid Unix-only commands like find/head/pwd/command -v.",
   "Use equivalents like Get-ChildItem, Select-Object -First, Get-Location.",
   "You can read and edit files inside the current workspace using file tools.",
@@ -819,11 +820,18 @@ function clipOutput(text: string, maxChars = MAX_TOOL_OUTPUT_CHARS): string {
 
 async function runBash(command: string, timeoutMs: number): Promise<string> {
   const isWindows = process.platform === "win32";
+  // PowerShell 5.x does not treat `&&` like cmd/bash; models often emit `cd path && tool`.
+  // Route chained commands through cmd.exe so autonomous runs validate reliably on Windows.
+  const windowsUseCmd = isWindows && /\s&&\s/.test(command);
   const { stdout, stderr } = isWindows
-    ? await execFileAsync("powershell", ["-NoProfile", "-Command", command], {
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024 * 8,
-      })
+    ? await execFileAsync(
+        windowsUseCmd ? "cmd.exe" : "powershell.exe",
+        windowsUseCmd ? ["/d", "/s", "/c", command] : ["-NoProfile", "-Command", command],
+        {
+          timeout: timeoutMs,
+          maxBuffer: 1024 * 1024 * 8,
+        },
+      )
     : await execAsync(command, {
         shell: true,
         timeout: timeoutMs,
