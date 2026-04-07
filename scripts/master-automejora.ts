@@ -41,8 +41,8 @@ const DEFAULTS: Options = {
   requireWrite: true,
   requireValidation: "cargo check|cargo test",
   requireValidationSuccess: true,
-  // Allow Rust sources and the two TS drivers (self-improve loop edits ollero-cli; master may edit itself).
-  writeAllowRegex: "^src/|^scripts/(ollero-cli|master-automejora)\\.ts$",
+  // Allow Rust sources and the two TS drivers (self-improve loop edits allux-cli; master may edit itself).
+  writeAllowRegex: "^src/|^scripts/(allux-cli|master-automejora)\\.ts$",
   prewriteMaxInspectRounds: 2,
   prevalidationMaxPostWriteRounds: 1,
 };
@@ -121,7 +121,7 @@ function buildCliArgs(options: Options): string[] {
   const strictContract = [
     "Mandatory execution contract:",
     "1) Perform at least one real write_file or replace_in_file operation.",
-    "2) For existing large files (e.g. scripts/ollero-cli.ts), use replace_in_file with a minimal unique old_string — do not paste the whole file into write_file.",
+    "2) For existing large files (e.g. scripts/allux-cli.ts), use replace_in_file with a minimal unique old_string — do not paste the whole file into write_file.",
     "3) The edited path must satisfy the allowed write regex.",
     "4) Run validation command matching required regex (cargo check or cargo test).",
     "5) If not completed, continue tool-calling and do not finalize with summaries.",
@@ -132,7 +132,7 @@ function buildCliArgs(options: Options): string[] {
       : options.prompt;
   const common = [
     "--experimental-strip-types",
-    "scripts/ollero-cli.ts",
+    "scripts/allux-cli.ts",
     options.mode,
     options.mode === "run" ? options.taskId : askPromptWithContract,
     "--autonomous",
@@ -190,7 +190,7 @@ function sleep(ms: number): Promise<void> {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const cliPath = path.resolve(process.cwd(), "scripts", "ollero-cli.ts");
+  const cliPath = path.resolve(process.cwd(), "scripts", "allux-cli.ts");
 
   let cycle = 0;
   let previousHash = await sha256File(cliPath);
@@ -210,7 +210,7 @@ async function main() {
     const currentHash = await sha256File(cliPath);
     if (currentHash !== previousHash) {
       log(
-        `detected ollero-cli.ts change (${previousHash.slice(0, 12)} -> ${currentHash.slice(0, 12)}), reloading next cycle`,
+        `detected allux-cli.ts change (${previousHash.slice(0, 12)} -> ${currentHash.slice(0, 12)}), reloading next cycle`,
       );
       previousHash = currentHash;
     }

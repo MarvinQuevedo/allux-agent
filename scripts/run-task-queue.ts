@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 // @ts-nocheck
 /**
- * Ejecuta T01–T10 desde TASKS_OLLERO_TOOL_ACTIONS.md en orden, una corrida por tarea.
+ * Ejecuta T01–T10 desde TASKS_ALLUX_TOOL_ACTIONS.md en orden, una corrida por tarea.
  * Para tras demasiados fallos consecutivos (exit≠0).
  *
  * Uso:
@@ -20,7 +20,7 @@ import path from "path";
 
 type TaskSpec = {
   id: string;
-  /** Si true y --strict: pasa --require-write a ollero-cli */
+  /** Si true y --strict: pasa --require-write a allux-cli */
   preferWrite: boolean;
   /** Regex para --require-validation (bash); vacío = no exigir */
   requireValidation: string;
@@ -31,11 +31,11 @@ type TaskSpec = {
 };
 
 const DEFAULT_WRITE =
-  "^src/|^scripts/(ollero-cli|master-automejora)\\.ts$|^TASKS_OLLERO_TOOL_ACTIONS\\.md$";
+  "^src/|^scripts/(allux-cli|master-automejora)\\.ts$|^TASKS_ALLUX_TOOL_ACTIONS\\.md$";
 
-const MODEL = process.env.OLLERO_QUEUE_MODEL ?? "qwen3-coder:30b";
-const MAX_ROUNDS = process.env.OLLERO_QUEUE_MAX_ROUNDS ?? "16";
-const MAX_ERRORS = Number(process.env.OLLERO_QUEUE_MAX_ERRORS ?? "3");
+const MODEL = process.env.ALLUX_QUEUE_MODEL ?? "qwen3-coder:30b";
+const MAX_ROUNDS = process.env.ALLUX_QUEUE_MAX_ROUNDS ?? "16";
+const MAX_ERRORS = Number(process.env.ALLUX_QUEUE_MAX_ERRORS ?? "3");
 
 const VERIFY_ONLY =
   "First: read relevant files. If the requested capability already exists and works, do NOT duplicate it; only run cargo test (or minimal checks) and report PASS with file:line evidence. If something is clearly missing, make the smallest safe change within allowed paths.";
@@ -52,19 +52,19 @@ const QUEUE: TaskSpec[] = [
     preferWrite: true,
     requireValidation: "cargo test",
     writeAllowRegex: DEFAULT_WRITE,
-    systemExtra: `${VERIFY_ONLY} Task T02: improve or verify CLI documentation in TASKS_OLLERO_TOOL_ACTIONS.md / ollero-cli help; use replace_in_file after at most 2 reads of the same file.`,
+    systemExtra: `${VERIFY_ONLY} Task T02: improve or verify CLI documentation in TASKS_ALLUX_TOOL_ACTIONS.md / allux-cli help; use replace_in_file after at most 2 reads of the same file.`,
   },
   {
     id: "T03",
     preferWrite: false,
     requireValidation: "cargo test",
-    systemExtra: `${VERIFY_ONLY} Task T03: verify list/show/run/ask exist in scripts/ollero-cli.ts; do not rewrite the whole file.`,
+    systemExtra: `${VERIFY_ONLY} Task T03: verify list/show/run/ask exist in scripts/allux-cli.ts; do not rewrite the whole file.`,
   },
   {
     id: "T04",
     preferWrite: false,
     requireValidation: "cargo test",
-    systemExtra: `${VERIFY_ONLY} Task T04: verify run logs markdown under .ollero-cli/runs with metrics; fix only if broken.`,
+    systemExtra: `${VERIFY_ONLY} Task T04: verify run logs markdown under .allux-cli/runs with metrics; fix only if broken.`,
   },
   {
     id: "T05",
@@ -130,7 +130,7 @@ function parseArgs(argv: string[]): {
       i += 1;
     }
   }
-  if (process.env.OLLERO_QUEUE_STRICT === "1") strict = true;
+  if (process.env.ALLUX_QUEUE_STRICT === "1") strict = true;
   return { dryList, fromId, toId, strict };
 }
 
@@ -140,7 +140,7 @@ const CARGO_GATE =
 function buildArgs(spec: TaskSpec, strict: boolean): string[] {
   const args = [
     "--experimental-strip-types",
-    path.join("scripts", "ollero-cli.ts"),
+    path.join("scripts", "allux-cli.ts"),
     "run",
     spec.id,
     "--autonomous",

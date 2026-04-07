@@ -22,7 +22,7 @@ pub async fn run_wizard() -> Result<Config> {
     println!("{}", "  Step 1/2 — Ollama connection".bold().white());
     println!(
         "{}",
-        "  Ollero uses a local Ollama server to run AI models.".dimmed()
+        "  Allux uses a local Ollama server to run AI models.".dimmed()
     );
     println!(
         "{}",

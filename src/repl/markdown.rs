@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn bold_list_no_raw_stars() {
-        let s = to_terminal("**Name:** ollero\n\n* one\n* two\n");
+        let s = to_terminal("**Name:** allux\n\n* one\n* two\n");
         assert!(!s.contains("**"));
         assert!(!s.contains("* one"));
     }

@@ -1,4 +1,4 @@
-# Ollero Validation Suite (Autonomous CLI)
+# Allux Validation Suite (Autonomous CLI)
 
 This suite validates the full autonomous workflow against a real sample project:
 - analyze existing code
@@ -21,7 +21,7 @@ The sample intentionally includes:
 Run one autonomous prompt:
 
 ```bash
-node --experimental-strip-types scripts/ollero-cli.ts ask "Work only inside sandbox/sample-rust-app. Improve the implementation in src/lib.rs for clarity, keep behavior, then run cargo test there. Respond in English." --autonomous --max-rounds 8 --verbose
+node --experimental-strip-types scripts/allux-cli.ts ask "Work only inside sandbox/sample-rust-app. Improve the implementation in src/lib.rs for clarity, keep behavior, then run cargo test there. Respond in English." --autonomous --max-rounds 8 --verbose
 ```
 
 Expected:
@@ -34,7 +34,7 @@ Expected:
 Use batch file: `validation/prompts-sequential.txt`
 
 ```bash
-node --experimental-strip-types scripts/ollero-cli.ts ask --batch-file validation/prompts-sequential.txt --autonomous --max-rounds 8 --verbose
+node --experimental-strip-types scripts/allux-cli.ts ask --batch-file validation/prompts-sequential.txt --autonomous --max-rounds 8 --verbose
 ```
 
 Behavior:
@@ -54,7 +54,7 @@ node --experimental-strip-types scripts/master-automejora.ts --cycles 2 --interv
 Expected:
 - supervisor waits for child completion
 - if child returns non-zero, it restarts
-- if `scripts/ollero-cli.ts` changed, next cycle uses new version
+- if `scripts/allux-cli.ts` changed, next cycle uses new version
 - exits early when ready token is detected (default)
 
 ## 5) Regression Checks for Main Project

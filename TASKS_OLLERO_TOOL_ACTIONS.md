@@ -1,7 +1,7 @@
-# Ollero: tareas minimas por iteracion
+# Allux: tareas minimas por iteracion
 
 ## Objetivo operativo
-Trabajar en cambios pequenos, verificables y acumulables para mejorar `ollero` sin sobrecargar el script autonomo.
+Trabajar en cambios pequenos, verificables y acumulables para mejorar `allux` sin sobrecargar el script autonomo.
 
 ## Modelo recomendado para tool actions
 - **Modelo principal**: `qwen3.5:9b`
@@ -26,9 +26,9 @@ Trabajar en cambios pequenos, verificables y acumulables para mejorar `ollero` s
 - `--verbose`: imprime logs paso a paso (rondas, tool calls, inicio/fin, guardado y pruning de corridas).
 
 ### Ejemplos
-- `node --experimental-strip-types scripts/ollero-cli.ts ask "diagnostica este repo" --autonomous`
-- `node --experimental-strip-types scripts/ollero-cli.ts run T03 --autonomous`
-- `node --experimental-strip-types scripts/ollero-cli.ts ask "busca docs de ollama tools" --allow-web`
+- `node --experimental-strip-types scripts/allux-cli.ts ask "diagnostica este repo" --autonomous`
+- `node --experimental-strip-types scripts/allux-cli.ts run T03 --autonomous`
+- `node --experimental-strip-types scripts/allux-cli.ts ask "busca docs de ollama tools" --allow-web`
 
 ## Cola automatizada (T01–T10 en orden)
 
@@ -38,24 +38,24 @@ Ejecuta las tareas **una por una** con validacion (`cargo test` / patrones por t
 npx tsx scripts/run-task-queue.ts
 ```
 
-Por defecto **no** exige escritura de archivos (evita bucles read-only del modelo). Para exigir al menos un `write`/`replace` en tareas de documentacion, usa **`--strict`** o `OLLERO_QUEUE_STRICT=1`.
+Por defecto **no** exige escritura de archivos (evita bucles read-only del modelo). Para exigir al menos un `write`/`replace` en tareas de documentacion, usa **`--strict`** o `ALLUX_QUEUE_STRICT=1`.
 
 Solo listar sin ejecutar: `--dry-list`. Desde una tarea: `--from T04`. Hasta una tarea: `--to T06`.
 
-Variables opcionales: `OLLERO_QUEUE_MODEL` (default `qwen3-coder:30b`), `OLLERO_QUEUE_MAX_ROUNDS`, `OLLERO_QUEUE_MAX_ERRORS`.
+Variables opcionales: `ALLUX_QUEUE_MODEL` (default `qwen3-coder:30b`), `ALLUX_QUEUE_MAX_ROUNDS`, `ALLUX_QUEUE_MAX_ERRORS`.
 
 ## Smoke manual (checklist minimo, T06)
 
-- `npx tsx scripts/ollero-cli.ts list` — lista IDs de tareas.
-- `npx tsx scripts/ollero-cli.ts show T01` — muestra prompt de T01.
-- `npx tsx scripts/ollero-cli.ts run T01 --dry-run` — no llama a Ollama.
+- `npx tsx scripts/allux-cli.ts list` — lista IDs de tareas.
+- `npx tsx scripts/allux-cli.ts show T01` — muestra prompt de T01.
+- `npx tsx scripts/allux-cli.ts run T01 --dry-run` — no llama a Ollama.
 - Ollama detenido: una corrida debe fallar con error claro de conexion.
 - Modelo inexistente (`--model no-existe-xyz`): error del servidor o del cliente manejable.
 
 ## TASK T01 - Verificar baseline local
 ### Subtareas
 - Confirmar que Ollama responde y el modelo existe.
-- Confirmar que `ollero` compila sin cambios.
+- Confirmar que `allux` compila sin cambios.
 - Capturar baseline de pruebas actuales.
 
 ### Archivos involucrados
@@ -86,8 +86,8 @@ Restricciones:
 - Incluir ejemplos de uso basico y depuracion.
 
 ### Archivos involucrados
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
-- `scripts/ollero-cli.ts`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
+- `scripts/allux-cli.ts`
 
 ### PROMPT
 ```text
@@ -112,8 +112,8 @@ Restricciones:
 - Permitir seleccionar tarea por ID y enviar su prompt.
 
 ### Archivos involucrados
-- `scripts/ollero-cli.ts`
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `scripts/allux-cli.ts`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text
@@ -137,7 +137,7 @@ Criterios:
 - Crear carpeta de salidas reutilizable.
 
 ### Archivos involucrados
-- `scripts/ollero-cli.ts`
+- `scripts/allux-cli.ts`
 
 ### PROMPT
 ```text
@@ -160,7 +160,7 @@ Formato:
 - Mantener mismo pipeline de guardado de resultados.
 
 ### Archivos involucrados
-- `scripts/ollero-cli.ts`
+- `scripts/allux-cli.ts`
 
 ### PROMPT
 ```text
@@ -182,7 +182,7 @@ Criterios:
 - Cubrir casos felices y errores comunes.
 
 ### Archivos involucrados
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text
@@ -199,15 +199,15 @@ Salida:
 - lista de pasos + resultado esperado por paso
 ```
 
-## TASK T07 - Integrar workflow con Ollero Rust
+## TASK T07 - Integrar workflow con Allux Rust
 ### Subtareas
 - Definir como usar CLI TS junto con REPL Rust sin conflictos.
 - Proponer secuencia operativa diaria.
 
 ### Archivos involucrados
 - `src/repl/mod.rs`
-- `scripts/ollero-cli.ts`
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `scripts/allux-cli.ts`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text
@@ -215,7 +215,7 @@ Actua como architect de herramientas locales.
 
 Objetivo:
 Definir un workflow simple donde:
-- REPL Rust de ollero se usa para trabajo interactivo
+- REPL Rust de allux se usa para trabajo interactivo
 - CLI TS se usa para pruebas controladas por tarea y debugging
 
 Entrega:
@@ -229,7 +229,7 @@ Entrega:
 - Reforzar criterio de "una tarea, un objetivo".
 
 ### Archivos involucrados
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text
@@ -252,8 +252,8 @@ Salida:
 - Redactar mensaje de commit orientado a intencion.
 
 ### Archivos involucrados
-- `scripts/ollero-cli.ts`
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `scripts/allux-cli.ts`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text
@@ -277,7 +277,7 @@ Restricciones:
 - Priorizar por impacto y riesgo.
 
 ### Archivos involucrados
-- `TASKS_OLLERO_TOOL_ACTIONS.md`
+- `TASKS_ALLUX_TOOL_ACTIONS.md`
 
 ### PROMPT
 ```text

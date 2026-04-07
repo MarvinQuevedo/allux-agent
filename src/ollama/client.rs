@@ -66,7 +66,7 @@ impl OllamaClient {
                     m.push_str(
                         "\n\nThis model cannot use tools in Ollama. Try: ollama pull llama3.2 \
                          (or llama3.1, qwen2.5, mistral — see https://ollama.com/search?c=tools), \
-                         then /model <name> in Ollero.",
+                         then /model <name> in Allux.",
                     );
                 }
                 m

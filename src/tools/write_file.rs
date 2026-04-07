@@ -20,7 +20,7 @@ mod tests {
 
     #[test]
     fn test_write_and_verify() {
-        let path = std::env::temp_dir().join("ollero_write_test.txt");
+        let path = std::env::temp_dir().join("allux_write_test.txt");
         let path_str = path.to_str().unwrap();
 
         let result = run_write_file(path_str, "hello\nworld\n").unwrap();

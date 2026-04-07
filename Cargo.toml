@@ -1,5 +1,5 @@
 [package]
-name = "ollero"
+name = "allux"
 version = "0.1.0"
 edition = "2021"
 description = "Local code agent powered by Ollama"
@@ -7,7 +7,7 @@ authors = ["MarvinQuevedo"]
 license = "GPL-3.0-or-later"
 
 [[bin]]
-name = "ollero"
+name = "allux"
 path = "src/main.rs"
 
 [dependencies]
@@ -37,6 +37,8 @@ toml = "0.8"
 # Terminal input (arrow keys, raw mode) — also used later for TUI
 crossterm = "0.28"
 pulldown-cmark = "0.12"
+indicatif = "0.17"
+tokio-util = { version = "0.7", features = ["codec"] }
 
 [profile.release]
 opt-level = 3

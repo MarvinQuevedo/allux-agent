@@ -39,7 +39,7 @@ impl Config {
     pub fn config_dir() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("ollero")
+            .join("allux")
     }
 
     /// Returns None when config does not exist yet.
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn test_save_and_load_roundtrip() {
-        let dir = std::env::temp_dir().join("ollero_test_config");
+        let dir = std::env::temp_dir().join("allux_test_config");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
 
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn test_load_from_nonexistent_returns_none() {
-        let path = std::env::temp_dir().join("ollero_nonexistent_config.toml");
+        let path = std::env::temp_dir().join("allux_nonexistent_config.toml");
         let _ = std::fs::remove_file(&path);
         let result = Config::load_from(&path).unwrap();
         assert!(result.is_none());
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_legacy_toml_without_config_version_gets_default() {
-        let dir = std::env::temp_dir().join("ollero_test_legacy_config");
+        let dir = std::env::temp_dir().join("allux_test_legacy_config");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         std::fs::write(

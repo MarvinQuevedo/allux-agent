@@ -23,7 +23,7 @@ use crate::ollama::{
 use crate::tools;
 
 const SYSTEM_PROMPT: &str = "\
-You are Ollero, a local code assistant powered by Ollama. \
+You are Allux, a local code assistant powered by Ollama. \
 You help with software engineering tasks. \
 You have access to tools: read_file, write_file, edit_file, glob, grep, tree, bash. \
 Use them to explore and modify the codebase when needed. \
@@ -31,10 +31,10 @@ Always prefer reading files before editing them. \
 Be concise and precise.";
 
 const SYSTEM_PROMPT_CHAT_ONLY: &str = "\
-You are Ollero, a local code assistant. This session is in chat-only mode: \
+You are Allux, a local code assistant. This session is in chat-only mode: \
 Ollama does not expose tool calling for this model (e.g. many Gemma builds), so you cannot invoke read_file/grep yourself. \
 The user can load disk context with slash commands: `/read <path>` reads a file into the conversation; `/glob <pattern> [dir]` lists paths; `/tree [path] [depth]` shows a folder tree. \
-For broad questions (e.g. “read my files”, project status), Ollero may auto-attach a tree + file list + key manifests before your reply—use that content; do not say you cannot read files when it is present. \
+For broad questions (e.g. “read my files”, project status), Allux may auto-attach a tree + file list + key manifests before your reply—use that content; do not say you cannot read files when it is present. \
 Those results appear as user messages—use them to answer. Also use the workspace snapshot below. \
 For shell steps, put each command in a fenced block with language bash or sh — the app will offer to run them; if the user accepts, the command output is stored in the conversation for your next reply. \
 For file changes, put the target path on the opening fence line after the language (e.g. ```rust src/lib.rs) or as // path: rel/path.rs inside the block. \
@@ -43,7 +43,7 @@ To get native tool use back, they can `/model` a tool-capable model (e.g. llama3
 const MAX_TOOL_ROUNDS: usize = 10;
 
 const SYSTEM_PROMPT_PLAN: &str = "\
-You are Ollero, a local code assistant powered by Ollama. \
+You are Allux, a local code assistant powered by Ollama. \
 You help with software engineering tasks. \
 You have access to tools: read_file, write_file, edit_file, glob, grep, tree, bash. \
 Use them to explore and modify the codebase when needed. \
@@ -198,7 +198,7 @@ impl Repl {
         mode: &SessionMode,
         model_supports_tools: bool,
     ) -> String {
-        let intro = match mode {
+        let mut intro = match mode {
             SessionMode::Chat => SYSTEM_PROMPT_CHAT_ONLY,
             SessionMode::Agent => {
                 if model_supports_tools { SYSTEM_PROMPT } else { SYSTEM_PROMPT_CHAT_ONLY }
@@ -206,7 +206,28 @@ impl Repl {
             SessionMode::Plan => {
                 if model_supports_tools { SYSTEM_PROMPT_PLAN } else { SYSTEM_PROMPT_CHAT_ONLY }
             }
-        };
+        }.to_string();
+
+        intro.push_str("\n\n<workflow_hint>\nIf you need domain knowledge to write better code (e.g., specific framework best practices, UI design aesthetics), you can use bash to search or install skills BEFORE writing code:\n`npx --yes skills add <owner/repo> --skill <name> -y` (e.g. npx --yes skills add anthropics/skills --skill frontend-design -y).\nAfter downloading, read the installed `.agents/skills/<name>/SKILL.md` using `read_file` to understand the rules immediately.\n</workflow_hint>");
+
+        let mut loaded_skills = String::new();
+        let pattern = root.join(".agents").join("skills").join("*").join("SKILL.md");
+        if let Some(glob_str) = pattern.to_str() {
+            if let Ok(paths) = glob::glob(glob_str) {
+                for entry in paths.flatten() {
+                    if let Ok(content) = std::fs::read_to_string(&entry) {
+                        let name = entry.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("Unknown");
+                        loaded_skills.push_str(&format!("\n\n--- SKILL: {} ---\n{}", name, content));
+                    }
+                }
+            }
+        }
+        if !loaded_skills.is_empty() {
+            intro.push_str("\n\n<installed_skills>\nYou have the following domain skills installed natively. Apply these rules stringently in your solutions:\n");
+            intro.push_str(&loaded_skills);
+            intro.push_str("\n</installed_skills>");
+        }
+
         format!("{intro}\n\n{}", crate::workspace::snapshot(root))
     }
 
@@ -365,9 +386,8 @@ impl Repl {
             let spin_on_text = spin_active.clone();
             let spinner = spawn_thinking_spinner(spin_active.clone());
 
-            let mut result = self
-                .client
-                .chat(
+            let mut result = tokio::select! {
+                res = self.client.chat(
                     &self.history,
                     tools_arg,
                     Some(options.clone()),
@@ -377,8 +397,9 @@ impl Repl {
                         }
                         streamed_text.push_str(chunk);
                     },
-                )
-                .await;
+                ) => res,
+                _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("Cancelled by user (Ctrl+C)")),
+            };
 
             finish_thinking_spinner(&spin_active, spinner).await;
 
@@ -403,12 +424,12 @@ impl Repl {
 
                     let spin2 = Arc::new(AtomicBool::new(true));
                     let sp2 = spawn_thinking_spinner(spin2.clone());
-                    result = self
-                        .client
-                        .chat(&self.history, None, Some(options), |chunk| {
+                    result = tokio::select! {
+                        res = self.client.chat(&self.history, None, Some(options), |chunk| {
                             streamed_text.push_str(chunk);
-                        })
-                        .await;
+                        }) => res,
+                        _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("Cancelled by user (Ctrl+C)")),
+                    };
                     finish_thinking_spinner(&spin2, sp2).await;
                 }
             }
@@ -494,73 +515,104 @@ impl Repl {
     /// Returns `true` if the user confirmed (a "Proceed." message is pushed to history).
     /// Returns `false` if the user rejected (the user's original message is popped from history).
     async fn plan_phase(&mut self, stdout: &mut io::Stdout) -> bool {
-        // Build a temporary messages slice: same history but the last user message asks for a plan.
-        let mut plan_messages = self.history.clone();
-        if let Some(last) = plan_messages.last_mut() {
-            if last.role == "user" {
-                last.content.push_str(
-                    "\n\nBefore executing anything, reply with a concise numbered plan \
-                     of the exact steps you will take. Do not call any tools. \
-                     Do not start executing. I will confirm the plan before you proceed.",
-                );
+        loop {
+            // Build a temporary messages slice: same history but the last user message asks for a plan.
+            let mut plan_messages = self.history.clone();
+            if let Some(last) = plan_messages.last_mut() {
+                if last.role == "user" {
+                    last.content.push_str(
+                        "\n\nBefore executing anything, reply with a concise numbered plan \
+                         of the exact steps you will take. Do not call any tools. \
+                         Do not start executing. I will confirm the plan before you proceed.",
+                    );
+                }
+            }
+
+            let spin_active = Arc::new(AtomicBool::new(true));
+            let spinner = spawn_thinking_spinner(spin_active.clone());
+            let mut plan_text = String::new();
+            let options = self.chat_options();
+
+            let result = tokio::select! {
+                res = self.client.chat(&plan_messages, None, Some(options), |chunk| {
+                    plan_text.push_str(chunk);
+                }) => res,
+                _ = tokio::signal::ctrl_c() => Err(anyhow::anyhow!("Cancelled by user (Ctrl+C)")),
+            };
+
+            finish_thinking_spinner(&spin_active, spinner).await;
+
+            if let Err(e) = result {
+                println!();
+                eprintln!("{}", format!("Error during planning: {e}").red());
+                self.history.pop(); // remove the user message
+                return false;
+            }
+
+            // Display the plan
+            println!();
+            println!("{}", "📋  Plan:".bold().cyan());
+            let rendered = markdown::to_terminal(&plan_text);
+            print!("{}", rendered.trim_end());
+            if !rendered.ends_with('\n') {
+                println!();
+            }
+            println!();
+
+            // Push plan to history so the LLM remembers it during execution
+            self.history.push(Message::assistant(&plan_text));
+
+            // Ask user
+            loop {
+                const PLAN_PROMPT: &str = "Plan: [y]es / [n]o / [s]ave / <feedback>: ";
+                let vis = PLAN_PROMPT.chars().count();
+                let input = match self.input.read_line(PLAN_PROMPT, vis, None) {
+                    Ok(Some(s)) => s.trim().to_string(),
+                    _ => {
+                        self.history.pop(); // remove assistant plan
+                        self.history.pop(); // remove user message
+                        return false;
+                    }
+                };
+
+                let t = input.to_lowercase();
+                if t == "y" || t == "yes" {
+                    self.history.push(Message::user("Proceed with the plan as agreed."));
+                    println!("{}", "  Executing…".dimmed());
+                    println!();
+                    let _ = stdout.flush();
+                    return true;
+                } else if t == "n" || t == "no" {
+                    self.history.pop(); // remove assistant plan
+                    self.history.pop(); // remove user message
+                    println!("{}", "  Plan rejected.".dimmed());
+                    return false;
+                } else if t == "s" || t == "save" {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let filename = format!("plan_{}.md", ts);
+                    let save_path = self.workspace_root.join(&filename);
+                    match std::fs::write(&save_path, &plan_text) {
+                        Ok(_) => {
+                            let msg = format!("✓ Saved plan to {}", filename);
+                            println!("  {}", msg.green());
+                        }
+                        Err(e) => {
+                            let msg = format!("✗ Error saving plan: {}", e);
+                            eprintln!("  {}", msg.red());
+                        }
+                    }
+                    continue; // ask again
+                } else if !input.is_empty() {
+                    // Treat as feedback
+                    println!("{}", "  Iterating on plan with your feedback…".dimmed());
+                    self.history.push(Message::user(format!("Feedback on the plan:\n\n{}\n\nPlease provide a new updated plan based on this feedback.", input)));
+                    break; // break inner loop to generate a new plan
+                }
             }
         }
-
-        let spin_active = Arc::new(AtomicBool::new(true));
-        let spinner = spawn_thinking_spinner(spin_active.clone());
-        let mut plan_text = String::new();
-        let options = self.chat_options();
-
-        let result = self
-            .client
-            .chat(&plan_messages, None, Some(options), |chunk| {
-                plan_text.push_str(chunk);
-            })
-            .await;
-
-        finish_thinking_spinner(&spin_active, spinner).await;
-
-        if let Err(e) = result {
-            println!();
-            eprintln!("{}", format!("Error during planning: {e}").red());
-            self.history.pop(); // remove the user message
-            return false;
-        }
-
-        // Display the plan
-        println!();
-        println!("{}", "📋  Plan:".bold().cyan());
-        let rendered = markdown::to_terminal(&plan_text);
-        print!("{}", rendered.trim_end());
-        if !rendered.ends_with('\n') {
-            println!();
-        }
-        println!();
-
-        // Push plan to history so the LLM remembers it during execution
-        self.history.push(Message::assistant(&plan_text));
-
-        // Ask user
-        const PLAN_PROMPT: &str = "Execute this plan? [y/N]: ";
-        let vis = PLAN_PROMPT.chars().count();
-        let confirmed = match self.input.read_line(PLAN_PROMPT, vis, None) {
-            Ok(Some(s)) => s.trim().to_lowercase().starts_with('y'),
-            _ => false,
-        };
-
-        if !confirmed {
-            self.history.pop(); // remove assistant plan
-            self.history.pop(); // remove user message
-            println!("{}", "  Plan rejected.".dimmed());
-            return false;
-        }
-
-        // Tell the LLM to proceed
-        self.history.push(Message::user("Proceed with the plan."));
-        println!("{}", "  Executing…".dimmed());
-        println!();
-        let _ = stdout.flush();
-        true
     }
 
     /// After a chat-only reply, offer to run extracted shell blocks (not shown as duplicate prose).
@@ -584,7 +636,7 @@ impl Repl {
                             println!();
                         }
                         let inject = format!(
-                            "The user approved running this suggested shell command in Ollero.\n\n\
+                            "The user approved running this suggested shell command in Allux.\n\n\
                              **Command:** `{cmd}`\n\n**Output:**\n```\n{out}\n```"
                         );
                         self.history.push(Message::user(inject));
@@ -593,7 +645,7 @@ impl Repl {
                     Err(e) => {
                         eprintln!("{}", format!("{e}").red());
                         let inject = format!(
-                            "The user approved running this suggested shell command in Ollero, but it failed.\n\n\
+                            "The user approved running this suggested shell command in Allux, but it failed.\n\n\
                              **Command:** `{cmd}`\n\n**Error:** {e}"
                         );
                         self.history.push(Message::user(inject));
@@ -712,30 +764,38 @@ impl Repl {
             }
             // ───────────────────────────────────────────────────────────────────
 
-            // Print: ⚙ read_file(path="src/main.rs") — Claude-style visible tool use
-            print!("    {} {}(", "⚙".cyan(), name.bold());
-            if let Some(obj) = args.as_object() {
-                let summary: Vec<String> = obj
-                    .iter()
-                    .take(2)
-                    .map(|(k, v)| {
-                        let val = v.as_str().unwrap_or("…");
-                        let short = if val.len() > 50 { &val[..50] } else { val };
-                        format!("{k}={short:?}")
-                    })
-                    .collect();
-                print!("{}", summary.join(", ").dimmed());
+            let is_bash = name == "bash";
+
+            if !is_bash {
+                // Print: ⚙ read_file(path="src/main.rs") — Claude-style visible tool use
+                print!("    {} {}(", "⚙".cyan(), name.bold());
+                if let Some(obj) = args.as_object() {
+                    let summary: Vec<String> = obj
+                        .iter()
+                        .take(2)
+                        .map(|(k, v)| {
+                            let val = v.as_str().unwrap_or("…");
+                            let short = if val.len() > 50 { &val[..50] } else { val };
+                            format!("{k}={short:?}")
+                        })
+                        .collect();
+                    print!("{}", summary.join(", ").dimmed());
+                }
+                print!(") ");
+                let _ = stdout.flush();
             }
-            print!(") ");
-            let _ = stdout.flush();
 
             let output = match tools::dispatch(name, args).await {
                 Ok(out) => {
-                    println!("{}", "✓".green());
+                    if !is_bash {
+                        println!("{}", "✓".green());
+                    }
                     out
                 }
                 Err(e) => {
-                    println!("{}", "✗".red());
+                    if !is_bash {
+                        println!("{}", "✗".red());
+                    }
                     format!("Error executing {name}: {e}")
                 }
             };

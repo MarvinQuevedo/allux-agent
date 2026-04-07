@@ -1,4 +1,4 @@
-# Ollero — Feature Justification & Resource Analysis
+# Allux — Feature Justification & Resource Analysis
 
 > Why each feature exists, what uses AI vs pure software, and how we optimize local resource usage.
 
@@ -16,7 +16,7 @@
 
 ## 1. AI vs Pure Software — Complete Map
 
-Every feature in Ollero falls into one of three categories:
+Every feature in Allux falls into one of three categories:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -40,7 +40,7 @@ Every feature in Ollero falls into one of three categories:
 │    - Undo system (file backup/restore)                          │
 │    - Session save/load (JSON serialization)                     │
 │    - Session listing (read directory, sort by date)             │
-│    - Config parsing (.Ollero.toml, config.toml)                  │
+│    - Config parsing (.Allux.toml, config.toml)                  │
 │    - Config TUI tab (display, edit settings)                    │
 │    - Token counting (heuristic or tiktoken)                     │
 │    - Token usage display (stats, gauge bars)                    │
@@ -103,7 +103,7 @@ Pure Software:  ~40 features  (85% of all features)
 AI-Powered:      ~7 features  (12% of all features)
 Hybrid:          ~3 features  ( 3% of all features)
 
-This means: Ollero is a software tool FIRST, that happens to use AI
+This means: Allux is a software tool FIRST, that happens to use AI
 for the parts where human-like reasoning is genuinely needed.
 The AI is the brain; everything else is the body.
 ```
@@ -205,11 +205,11 @@ The AI is the brain; everything else is the body.
 
 ### 2.8 Conversation Responses (AI-Powered)
 
-**Why it exists:** This is the core reason Ollero exists. The user asks a question or describes a task; the LLM reasons about it and responds.
+**Why it exists:** This is the core reason Allux exists. The user asks a question or describes a task; the LLM reasons about it and responds.
 
 **Why it must be AI:** Understanding natural language, reasoning about code, deciding what to do — these are fundamentally AI tasks. No deterministic algorithm can "understand" what the user means by "fix the auth bug."
 
-**Processing cost:** HIGH. This is the most expensive operation in Ollero.
+**Processing cost:** HIGH. This is the most expensive operation in Allux.
 - Input tokens: system prompt + project meta + conversation history + tool results = 2K-30K tokens
 - Output tokens: response text + tool calls = 100-2K tokens
 - GPU time: 2-30 seconds depending on model size and input length
@@ -248,7 +248,7 @@ The AI is the brain; everything else is the body.
 
 ### 2.11 History Compression (AI-Powered)
 
-**Why it exists:** After 20+ turns, the conversation history exceeds the model's context window. Without compression, Ollero would simply stop working. Compression lets conversations continue indefinitely.
+**Why it exists:** After 20+ turns, the conversation history exceeds the model's context window. Without compression, Allux would simply stop working. Compression lets conversations continue indefinitely.
 
 **Why it must be AI:** Summarizing a conversation requires understanding what was discussed, what decisions were made, what's still relevant. A deterministic "keep last N messages" loses critical context (e.g., the user said "we're using hexagonal architecture" 15 messages ago).
 
@@ -304,7 +304,7 @@ The AI is the brain; everything else is the body.
 
 ### 2.15 MCP Protocol Support (Pure Software + AI routing)
 
-**Why it exists:** Ollero can't have built-in tools for every possible service (databases, Jira, GitHub, Slack, internal APIs). MCP lets external servers expose tools that the LLM can discover and use — infinite extensibility without modifying Ollero's code.
+**Why it exists:** Allux can't have built-in tools for every possible service (databases, Jira, GitHub, Slack, internal APIs). MCP lets external servers expose tools that the LLM can discover and use — infinite extensibility without modifying Allux's code.
 
 **What's software:** Process spawning, JSON-RPC communication, tool discovery, config parsing, connection management.
 
@@ -348,7 +348,7 @@ The AI is the brain; everything else is the body.
 
 ### 2.19 Context Resolution (Hybrid)
 
-**Why it exists:** When the user says "fix the auth bug", Ollero needs to figure out which files to include in the LLM's context. Including everything wastes tokens. Including nothing leaves the LLM blind.
+**Why it exists:** When the user says "fix the auth bug", Allux needs to figure out which files to include in the LLM's context. Including everything wastes tokens. Including nothing leaves the LLM blind.
 
 **The software part (no AI):**
 - Extract file paths mentioned in the user's message ("look at src/auth.rs")
@@ -600,7 +600,7 @@ Summary of which features are cheap vs expensive to run:
 │  Web page fetch + clean (network latency)                          │
 │  Bash long-running commands (cargo build, docker, etc.)            │
 │                                                                     │
-│  CONSTANT COST (always consuming while Ollero runs)                 │
+│  CONSTANT COST (always consuming while Allux runs)                 │
 │  ─────────────────────────────────────────────────                  │
 │  VRAM for loaded Ollama model (6-24GB)                             │
 │  RAM for TUI + data structures (~50MB)                             │
@@ -614,10 +614,10 @@ Summary of which features are cheap vs expensive to run:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  95% of Ollero's code handles pure software tasks that cost      │
+│  95% of Allux's code handles pure software tasks that cost      │
 │  nearly zero processing time.                                   │
 │                                                                 │
-│  5% of Ollero's code (the Ollama client) drives 99% of the      │
+│  5% of Allux's code (the Ollama client) drives 99% of the      │
 │  processing cost.                                               │
 │                                                                 │
 │  Therefore: EVERY optimization that reduces LLM token count     │

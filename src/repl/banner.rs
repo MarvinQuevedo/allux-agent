@@ -1,4 +1,4 @@
-//! Claude Code–style welcome panel (boxed header, tips, accent color).
+//! Welcome banner: gradient pixel-art logo + tips box.
 
 use std::path::Path;
 
@@ -6,7 +6,7 @@ use colored::Colorize;
 
 use crate::ollama::types::ResponseStats;
 
-/// Claude Code–style orange accent (RGB).
+/// Orange accent colour used throughout the UI.
 pub fn accent(s: &str) -> colored::ColoredString {
     s.truecolor(217, 119, 38)
 }
@@ -15,11 +15,11 @@ pub fn accent_dim(s: &str) -> colored::ColoredString {
     s.truecolor(180, 100, 45).dimmed()
 }
 
-/// Shown on the line **above** `>` while editing (keyboard discoverability; avoids cursor bugs under the prompt).
+/// Shown above `>` while editing.
 pub const INPUT_FOOTER: &str =
     "Ctrl+D exit (empty line) · /help · /read <path> · /quit · Ctrl+C clear line";
 
-/// Pretty-print token counts from Ollama (`prompt_eval_count` / `eval_count` on the last stream chunk).
+/// Pretty-print token counts from Ollama.
 pub fn print_token_usage(stats: &ResponseStats) {
     println!(
         "  {}  {}",
@@ -55,69 +55,71 @@ fn user_display_name() -> String {
     }
 }
 
-/// ASCII robot (compact, works in all fonts).
-const ROBOT: &str = "  o o\n   > ^\n  / \\";
+/// ALLUX in pixel-block letters — each row is exactly 44 visible chars.
+///
+/// Letter grid (8 chars wide, 1-char gap between letters):
+///   A  L  L  U  X
+const LOGO: [&str; 5] = [
+    "   ██    ██       ██       ██    ██ ██    ██",
+    "  ████   ██       ██       ██    ██  ██  ██ ",
+    " ██  ██  ██       ██       ██    ██   ████  ",
+    "████████ ██       ██       ██    ██  ██  ██ ",
+    "██    ██ ████████ ████████  ██████  ██    ██",
+];
+
+/// El Salvador flag gradient — azul ↔ blanco ↔ azul, one colour per row.
+const LOGO_COLORS: [(u8, u8, u8); 5] = [
+    (  0,  56, 147), // azul bandera (franja superior)
+    ( 70, 130, 200), // transición azul → blanco
+    (235, 240, 255), // blanco (franja central)
+    ( 70, 130, 200), // transición blanco → azul
+    (  0,  56, 147), // azul bandera (franja inferior)
+];
 
 pub fn print_welcome(version: &str, model: &str, workspace: &Path) {
     let user = user_display_name();
     let cwd = workspace.display().to_string();
     let v = accent("│");
+
     println!();
-    println!(
-        "{}",
-        accent(&format!(
-            "╭─ Ollero v{version} ─ local agent (Ollama) ─────────────────────────╮"
-        ))
-    );
-    println!("{}", accent("│"));
-    println!("{} {}", v, format!("Welcome back, {}!", user).bold());
-    println!("{}", accent("│"));
-    for line in ROBOT.lines() {
-        println!("{}{}", v, accent(line));
+
+    // Gradient pixel-art logo
+    for (line, &(r, g, b)) in LOGO.iter().zip(LOGO_COLORS.iter()) {
+        println!("  {}", line.truecolor(r, g, b).bold());
     }
-    println!("{}", accent("│"));
+
+    println!();
+
+    // Version / model / workspace subtitle
     println!(
-        "{}{}",
+        "  {}",
+        format!("v{version}  ·  {model}  ·  {cwd}")
+            .truecolor(140, 130, 170)
+            .dimmed()
+    );
+
+    println!();
+
+    // Welcome / tips box
+    println!("  {}", accent(&format!("╭{}╮", "─".repeat(55))));
+    println!(
+        "  {}  {}",
         v,
-        format!("{model} · {cwd}").dimmed()
+        format!("Welcome back, {}!", user).bold()
     );
-    println!("{}", accent("│"));
-    println!("{}", accent("├────────────────────────────────┬───────────────────────────────────┤"));
     println!(
-        "{}{}",
+        "  {}  {}",
         v,
-        " Tips for getting started".dimmed()
+        "/help · /model list · /quit · Ctrl+D to exit".dimmed()
     );
     println!(
-        "{}{}",
+        "  {}  {}",
         v,
-        "   /help — list commands".dimmed()
+        "Chat-only model? Use ```bash blocks — Allux will offer to run them."
+            .truecolor(140, 130, 170)
+            .dimmed()
     );
-    println!(
-        "{}{}",
-        v,
-        "   Ctrl+D on an empty line — exit".dimmed()
-    );
-    println!(
-        "{}{}",
-        v,
-        "   /model list — pick an Ollama model".dimmed()
-    );
-    println!("{}", accent("│"));
-    println!(
-        "{}{}",
-        v,
-        " Recent activity".dimmed()
-    );
-    println!(
-        "{}{}",
-        v,
-        "   No recent activity (new session)".dimmed()
-    );
-    println!("{}", accent("╰────────────────────────────────┴───────────────────────────────────╯"));
-    println!(
-        "{}",
-        accent_dim("* Chat-only models: use ```bash blocks — Ollero can offer to run them.")
-    );
+    println!("  {}", accent(&format!("╰{}╯", "─".repeat(55))));
+
     println!();
 }

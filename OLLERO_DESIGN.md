@@ -1,10 +1,10 @@
-# OLLERO — Local Code Agent powered by Ollama
+# ALLUX — Local Code Agent powered by Ollama
 
 > *"Your local code craftsman, shaped by Ollama"*
 
-### Why "Ollero"?
+### Why "Allux"?
 
-An **ollero** is a Spanish word for a craftsman who shapes pottery with their own hands — working locally, with their own materials, no external dependencies. Just like this agent: it runs 100% on your machine using local models via **Ollama**. The name also has a natural phonetic link with "Ollama" (Oll-ero / Oll-ama), reinforcing the connection to the local inference backend. In short: a local craftsman that shapes your code.
+An **allux** is a Spanish word for a craftsman who shapes pottery with their own hands — working locally, with their own materials, no external dependencies. Just like this agent: it runs 100% on your machine using local models via **Ollama**. The name also has a natural phonetic link with "Ollama" (Oll-ero / Oll-ama), reinforcing the connection to the local inference backend. In short: a local craftsman that shapes your code.
 
 ---
 
@@ -38,7 +38,7 @@ Interactive terminal-based development agent written in Rust. Uses local LLMs vi
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                       OLLERO TUI                             │
+│                       ALLUX TUI                             │
 │  ratatui + crossterm — markdown, diffs, confirmations       │
 ├─────────────────────────────────────────────────────────────┤
 │                    Orchestrator (Core)                       │
@@ -56,7 +56,7 @@ Interactive terminal-based development agent written in Rust. Uses local LLMs vi
 │     POST /api/chat — chunked JSON streaming, tool calls      │
 ├─────────────────────────────────────────────────────────────┤
 │              Session Store (disk persistence)                │
-│     ~/.config/ollero/sessions/ — resume, list, rename         │
+│     ~/.config/allux/sessions/ — resume, list, rename         │
 └─────────────────────────────────────────────────────────────┘
          │                    │                    │
     Ollama Local         Internet             MCP Servers
@@ -114,7 +114,7 @@ This is the **most critical component**. Local models have limited context windo
 
 ### 2.2 Automatic Project Detection
 
-On startup, OLLERO scans the working directory and builds a project map:
+On startup, ALLUX scans the working directory and builds a project map:
 
 ```rust
 struct ProjectMap {
@@ -142,7 +142,7 @@ struct KeyFile {
 ```
 
 **Auto-detected key files:**
-- `README.md`, `CLAUDE.md`, `.ollero.toml` → docs/config
+- `README.md`, `CLAUDE.md`, `.allux.toml` → docs/config
 - `Cargo.toml`, `package.json`, `pyproject.toml` → dependencies
 - `src/main.rs`, `src/lib.rs`, `index.ts`, `app.py` → entry points
 - `schema.prisma`, `migrations/` → DB schemas
@@ -222,10 +222,10 @@ impl ConversationManager {
 }
 ```
 
-### 2.5 Configuration File `.ollero.toml`
+### 2.5 Configuration File `.allux.toml`
 
 ```toml
-# .ollero.toml — in project root
+# .allux.toml — in project root
 
 [context]
 # Files that ALWAYS go into context
@@ -309,7 +309,7 @@ enum RiskLevel {
 
 ```
 1. User sends message
-2. OLLERO builds request with available tools:
+2. ALLUX builds request with available tools:
 
 POST /api/chat
 {
@@ -338,7 +338,7 @@ POST /api/chat
 
 3. Ollama responds with tool_calls or text content
 4. If tool_calls:
-   a. OLLERO evaluates permissions
+   a. ALLUX evaluates permissions
    b. Executes the tool
    c. Sends result back to model as "tool" role message
    d. Model generates next response (may request more tools)
@@ -533,11 +533,11 @@ impl Tool for EditFileTool {
 > **The agent ALWAYS asks before executing anything that modifies state.**
 > The user decides the **temporal scope** of each permission grant: just this once, this session, or permanently for this workspace.
 
-OLLERO never "takes control" — the user always has the final word, but can progressively delegate trust as they get comfortable.
+ALLUX never "takes control" — the user always has the final word, but can progressively delegate trust as they get comfortable.
 
 ### 4.2 The 4 Permission Scopes
 
-When OLLERO asks for permission and the user accepts, they choose **how long** that permission lasts:
+When ALLUX asks for permission and the user accepts, they choose **how long** that permission lasts:
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
@@ -547,15 +547,15 @@ When OLLERO asks for permission and the user accepts, they choose **how long** t
 │  1. ONCE — Execute once, then forget. Next time, ask again.       │
 │     Use case: one-off commands you want to review each time.      │
 │                                                                   │
-│  2. SESSION — Remembered while OLLERO is running.                  │
-│     Forgotten when OLLERO exits. Use case: "let cargo test         │
+│  2. SESSION — Remembered while ALLUX is running.                  │
+│     Forgotten when ALLUX exits. Use case: "let cargo test         │
 │     run freely while I work on this bug."                         │
 │                                                                   │
-│  3. WORKSPACE — Saved to .ollero/permissions.json.                 │
+│  3. WORKSPACE — Saved to .allux/permissions.json.                 │
 │     Persists across sessions for THIS project only.               │
 │     Use case: "cargo build is always OK in this project."         │
 │                                                                   │
-│  4. GLOBAL — Saved to ~/.config/ollero/permissions.json.           │
+│  4. GLOBAL — Saved to ~/.config/allux/permissions.json.           │
 │     Applies to ALL projects. Use case: "git status, ls,           │
 │     reading files — never ask me about these."                    │
 │                                                                   │
@@ -599,7 +599,7 @@ Inspired by claude-code-rust's smart option matching with keyboard shortcuts:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  OLLERO wants to execute:                                        │
+│  ALLUX wants to execute:                                        │
 │                                                                 │
 │    $ cargo test --lib                                           │
 │                                                                 │
@@ -619,7 +619,7 @@ For file edits, the diff is shown inline:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  OLLERO wants to edit: src/auth/jwt.rs                           │
+│  ALLUX wants to edit: src/auth/jwt.rs                           │
 │                                                                 │
 │  ┌─ Diff ────────────────────────────────────────────────┐     │
 │  │  @@ -45,1 +45,1 @@                                    │     │
@@ -642,9 +642,9 @@ For file edits, the diff is shown inline:
 struct PermissionGuard {
     /// Rules compiled into the binary — NEVER skippable
     hardcoded_rules: Vec<HardcodedRule>,
-    /// Global grants (~/.config/ollero/permissions.json)
+    /// Global grants (~/.config/allux/permissions.json)
     global_grants: PermissionStore,
-    /// Workspace grants (.ollero/permissions.json)
+    /// Workspace grants (.allux/permissions.json)
     workspace_grants: PermissionStore,
     /// Session grants (in memory, cleared on exit)
     session_grants: HashSet<PermissionKey>,
@@ -1043,19 +1043,19 @@ impl WebFetcher {
 ### 7.1 Main Layout
 
 ```
-┌─ OLLERO v0.1.0 ─── qwen2.5-coder:14b ─── ~/projects/my-app ──────┐
+┌─ ALLUX v0.1.0 ─── qwen2.5-coder:14b ─── ~/projects/my-app ──────┐
 │                                                                    │
 │  You: There's a bug in the auth function, tokens expire            │
 │       immediately after creation                                   │
 │                                                                    │
-│  OLLERO: Let me investigate. First I'll look for auth-related files │
+│  ALLUX: Let me investigate. First I'll look for auth-related files │
 │                                                                    │
 │  ┌─ grep "token.*expir" ────────────────────── 0.3s ──────────┐   │
 │  │ src/auth/jwt.rs:45:  let expiry = Utc::now();              │   │
 │  │ src/auth/jwt.rs:46:  // TODO: add duration                 │   │
 │  └────────────────────────────────────────────────────────────┘   │
 │                                                                    │
-│  OLLERO: Found the issue. In `src/auth/jwt.rs:45`, the expiry      │
+│  ALLUX: Found the issue. In `src/auth/jwt.rs:45`, the expiry      │
 │  is set to `Utc::now()` without adding any duration.               │
 │                                                                    │
 │  ┌─ edit_file src/auth/jwt.rs ────────────────────────────────┐   │
@@ -1074,7 +1074,7 @@ impl WebFetcher {
 Inspired by claude-code-rust's production-grade rendering pipeline:
 
 ```rust
-struct OlleroApp {
+struct AlluxApp {
     // === Message State ===
     messages: Vec<ChatMessage>,
     /// Index for O(1) tool call lookup by ID
@@ -1254,7 +1254,7 @@ struct MouseState {
 
 ### 8.1 Session Persistence
 
-Sessions are saved to disk so conversations can be resumed across OLLERO restarts:
+Sessions are saved to disk so conversations can be resumed across ALLUX restarts:
 
 ```rust
 struct Session {
@@ -1281,7 +1281,7 @@ struct Session {
 
 struct SessionManager {
     /// Directory where sessions are stored
-    sessions_dir: PathBuf, // ~/.config/ollero/sessions/
+    sessions_dir: PathBuf, // ~/.config/allux/sessions/
 }
 
 impl SessionManager {
@@ -1320,9 +1320,9 @@ impl SessionManager {
 ### 8.2 Session Commands
 
 ```
-ollero                        → Start new session
-ollero --resume <session_id>  → Resume a specific session
-ollero --last                 → Resume most recent session
+allux                        → Start new session
+allux --resume <session_id>  → Resume a specific session
+allux --last                 → Resume most recent session
 
 /sessions                    → List recent sessions
 /resume <id>                 → Resume a session mid-conversation
@@ -1333,7 +1333,7 @@ ollero --last                 → Resume most recent session
 ### 8.3 Auto-Save
 
 ```rust
-impl OlleroApp {
+impl AlluxApp {
     /// Save session after each complete turn (user + assistant)
     async fn auto_save_session(&self) {
         if let Err(e) = self.session_manager.save(&self.session).await {
@@ -1489,7 +1489,7 @@ enum SlashCommand {
     Help,                           // /help — Show available commands
 }
 
-impl OlleroApp {
+impl AlluxApp {
     fn handle_slash_command(&mut self, cmd: SlashCommand) -> Result<()> {
         match cmd {
             SlashCommand::Model(name) => {
@@ -1526,16 +1526,16 @@ impl OlleroApp {
 
 ```
 1. CLI arguments         (--model, --mode, etc.)
-2. Environment variables (OLLERO_MODEL, OLLERO_OLLAMA_URL, etc.)
-3. Project config        (.ollero.toml in project root)
-4. Global config         (~/.config/ollero/config.toml)
+2. Environment variables (ALLUX_MODEL, ALLUX_OLLAMA_URL, etc.)
+3. Project config        (.allux.toml in project root)
+4. Global config         (~/.config/allux/config.toml)
 5. Built-in defaults
 ```
 
 ### 11.2 Global Config
 
 ```toml
-# ~/.config/ollero/config.toml
+# ~/.config/allux/config.toml
 
 [general]
 # Default language for responses
@@ -1681,7 +1681,7 @@ Displayed in the status bar and via `/usage`:
 
 ### 13.1 What is MCP?
 
-MCP (Model Context Protocol) allows OLLERO to connect to external tool servers. This means users can extend OLLERO's capabilities without modifying its code.
+MCP (Model Context Protocol) allows ALLUX to connect to external tool servers. This means users can extend ALLUX's capabilities without modifying its code.
 
 Examples:
 - A database MCP server that exposes query tools
@@ -1692,7 +1692,7 @@ Examples:
 ### 13.2 MCP Configuration
 
 ```toml
-# .ollero.toml or ~/.config/ollero/config.toml
+# .allux.toml or ~/.config/allux/config.toml
 
 [[mcp.servers]]
 name = "database"
@@ -1831,20 +1831,20 @@ impl McpTool {
 ## 14. Project Structure (Rust)
 
 ```
-ollero/
+allux/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── README.md
-├── .ollero.toml.example
+├── .allux.toml.example
 │
 ├── src/
 │   ├── main.rs                  # Entry point, CLI args (clap)
-│   ├── app.rs                   # OlleroApp: main loop, state machine
+│   ├── app.rs                   # AlluxApp: main loop, state machine
 │   │
 │   ├── config/
 │   │   ├── mod.rs
-│   │   ├── ollero_config.rs      # .ollero.toml parsing
-│   │   └── global_config.rs     # ~/.config/ollero/config.toml
+│   │   ├── allux_config.rs      # .allux.toml parsing
+│   │   └── global_config.rs     # ~/.config/allux/config.toml
 │   │
 │   ├── ollama/
 │   │   ├── mod.rs
@@ -1936,7 +1936,7 @@ ollero/
 ### 15.1 Main Loop
 
 ```rust
-async fn main_loop(app: &mut OlleroApp) -> Result<()> {
+async fn main_loop(app: &mut AlluxApp) -> Result<()> {
     loop {
         // 1. Wait for user input
         let user_input = app.tui.read_input().await?;
@@ -2028,7 +2028,7 @@ async fn main_loop(app: &mut OlleroApp) -> Result<()> {
 ### 15.2 Sequence Diagram
 
 ```
-User           OLLERO             Ollama          Tool/MCP
+User           ALLUX             Ollama          Tool/MCP
   │              │                  │               │
   │── message ──▶│                  │               │
   │              │── build ctx ────▶│               │
@@ -2082,7 +2082,7 @@ User           OLLERO             Ollama          Tool/MCP
 
 ```toml
 [package]
-name = "ollero"
+name = "allux"
 version = "0.1.0"
 edition = "2021"
 description = "Local code agent powered by Ollama"
@@ -2166,7 +2166,7 @@ wiremock = "0.6"
 - [ ] Smart file inclusion based on user message
 - [ ] History retention with soft/hard limits
 - [ ] History compression via LLM summarization
-- [ ] `.ollero.toml` configuration
+- [ ] `.allux.toml` configuration
 
 **Result:** Efficient context management for limited windows.
 
@@ -2246,16 +2246,16 @@ For better accuracy, use `tiktoken-rs` with `cl100k_base` encoding as a reasonab
 ## Appendix C: Environment Variables
 
 ```bash
-OLLERO_OLLAMA_URL=http://localhost:11434    # Ollama URL
-OLLERO_MODEL=qwen2.5-coder:14b              # Default model
-OLLERO_MAX_CONTEXT=8192                      # Max context tokens
-OLLERO_LOG_LEVEL=info                        # Log level
-OLLERO_CONFIG_DIR=~/.config/ollero            # Global config directory
+ALLUX_OLLAMA_URL=http://localhost:11434    # Ollama URL
+ALLUX_MODEL=qwen2.5-coder:14b              # Default model
+ALLUX_MAX_CONTEXT=8192                      # Max context tokens
+ALLUX_LOG_LEVEL=info                        # Log level
+ALLUX_CONFIG_DIR=~/.config/allux            # Global config directory
 ```
 
 ## Appendix D: Differences from claude-code-rust
 
-| Feature | claude-code-rust | OLLERO |
+| Feature | claude-code-rust | ALLUX |
 |---|---|---|
 | **LLM Backend** | Anthropic API via TypeScript bridge | Ollama local HTTP API (no bridge) |
 | **Architecture** | Rust TUI + Node.js bridge (stdio JSON) | Pure Rust (single binary, no Node.js) |

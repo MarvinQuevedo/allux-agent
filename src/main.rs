@@ -1,6 +1,6 @@
-//! Ollero CLI binary.
+//! Allux CLI binary.
 //!
-//! This binary provides the command-line interface for the Ollero tool.
+//! This binary provides the command-line interface for the Allux tool.
 
 mod config;
 mod input;
@@ -19,6 +19,14 @@ use repl::Repl;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Ignore Ctrl+C globally so it never force-quits the CLI.
+    // (In raw mode, it's captured as a key event and clears the line).
+    tokio::spawn(async {
+        loop {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    });
+
     let config = match Config::load()? {
         Some(cfg) => cfg,
         None => setup::run_wizard().await?,

@@ -5,10 +5,10 @@
  * Minimal CLI to run Ollama prompts by task.
  *
  * Usage examples:
- *   npx tsx scripts/ollero-cli.ts list
- *   npx tsx scripts/ollero-cli.ts show T01
- *   npx tsx scripts/ollero-cli.ts run T01 --model qwen3.5:9b
- *   npx tsx scripts/ollero-cli.ts ask "explica src/repl/mod.rs"
+ *   npx tsx scripts/allux-cli.ts list
+ *   npx tsx scripts/allux-cli.ts show T01
+ *   npx tsx scripts/allux-cli.ts run T01 --model qwen3.5:9b
+ *   npx tsx scripts/allux-cli.ts ask "explica src/repl/mod.rs"
  */
 
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -68,8 +68,8 @@ type RunOutcome = {
 
 const DEFAULT_MODEL = "qwen3.5:9b";
 const DEFAULT_URL = "http://localhost:11434";
-const DEFAULT_TASKS_FILE = "TASKS_OLLERO_TOOL_ACTIONS.md";
-const DEFAULT_OUT_DIR = ".ollero-cli/runs";
+const DEFAULT_TASKS_FILE = "TASKS_ALLUX_TOOL_ACTIONS.md";
+const DEFAULT_OUT_DIR = ".allux-cli/runs";
 const DEFAULT_MAX_ROUNDS = 10;
 const DEFAULT_CMD_TIMEOUT_MS = 60_000;
 const DEFAULT_LLM_TIMEOUT_MS = 90_000;
@@ -119,7 +119,7 @@ type ChatResponse = {
 };
 
 const AUTONOMOUS_SYSTEM_PROMPT = [
-  "You are Ollero operating in autonomous mode.",
+  "You are Allux operating in autonomous mode.",
   "You are allowed to execute shell commands and use internet tools.",
   "Use tools when they are necessary to complete the task with evidence.",
   "Do not ask for confirmation before using tools.",
@@ -213,7 +213,7 @@ function parseArgs(argv: string[]) {
 function printHelp() {
   console.log(
     [
-      "Ollero CLI (simple task runner for Ollama)",
+      "Allux CLI (simple task runner for Ollama)",
       "",
       "Commands:",
       "  list                         List task IDs from markdown file",
@@ -854,7 +854,7 @@ async function webSearch(query: string): Promise<string> {
   const endpoint = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const response = await fetch(endpoint, {
     headers: {
-      "User-Agent": "ollero-cli/0.1",
+      "User-Agent": "allux-cli/0.1",
     },
   });
   if (!response.ok) {
@@ -881,7 +881,7 @@ async function webSearch(query: string): Promise<string> {
 async function webFetch(url: string): Promise<string> {
   const response = await fetch(url, {
     headers: {
-      "User-Agent": "ollero-cli/0.1",
+      "User-Agent": "allux-cli/0.1",
     },
   });
   if (!response.ok) {
