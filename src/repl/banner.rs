@@ -76,7 +76,7 @@ const LOGO_COLORS: [(u8, u8, u8); 5] = [
     (  0,  56, 147), // azul bandera (franja inferior)
 ];
 
-pub fn print_welcome(version: &str, model: &str, workspace: &Path) {
+pub fn print_welcome(version: &str, model: &str, workspace: &Path, skills: &[String]) {
     let user = user_display_name();
     let cwd = workspace.display().to_string();
     let v = accent("│");
@@ -107,6 +107,20 @@ pub fn print_welcome(version: &str, model: &str, workspace: &Path) {
         v,
         format!("Welcome back, {}!", user).bold()
     );
+
+    // Beautifully format active skills if any exist
+    if !skills.is_empty() {
+        let mut display_skills = skills.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        if skills.len() > 3 {
+            display_skills.push_str("...");
+        }
+        println!(
+            "  {}  {}",
+            v,
+            format!("🧠 Active skills: {}", display_skills.truecolor(100, 200, 255))
+        );
+    }
+
     println!(
         "  {}  {}",
         v,

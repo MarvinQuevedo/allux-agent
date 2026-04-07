@@ -40,7 +40,8 @@ For shell steps, put each command in a fenced block with language bash or sh —
 For file changes, put the target path on the opening fence line after the language (e.g. ```rust src/lib.rs) or as // path: rel/path.rs inside the block. \
 To get native tool use back, they can `/model` a tool-capable model (e.g. llama3.2). Be concise.";
 
-const MAX_TOOL_ROUNDS: usize = 10;
+//how set unlimited?
+const MAX_TOOL_ROUNDS: usize = 10000;
 
 const SYSTEM_PROMPT_PLAN: &str = "\
 You are Allux, a local code assistant powered by Ollama. \
@@ -114,6 +115,7 @@ pub struct Repl {
     /// False after Ollama reports the current model does not support tools.
     /// Reset to true when `/model` changes.
     model_supports_tools: bool,
+    verbose_tools: bool,
     input: InputReader,
     permissions: PermissionStore,
 }
@@ -128,6 +130,7 @@ enum SlashAction {
     ContextShow,
     ShowMode,
     SetMode(SessionMode),
+    ToggleVerboseTools,
     /// Read a file from disk and inject into history (chat-only / any model).
     ReadFile(String),
     Glob {
@@ -188,9 +191,26 @@ impl Repl {
             workspace_root,
             mode: SessionMode::Agent,
             model_supports_tools: true,
+            verbose_tools: false,
             input: InputReader::new(),
             permissions: PermissionStore::new(),
         }
+    }
+
+    fn get_installed_skills(root: &std::path::Path) -> Vec<(String, String)> {
+        let mut skills = Vec::new();
+        let pattern = root.join(".agents").join("skills").join("*").join("SKILL.md");
+        if let Some(glob_str) = pattern.to_str() {
+            if let Ok(paths) = glob::glob(glob_str) {
+                for entry in paths.flatten() {
+                    if let Ok(content) = std::fs::read_to_string(&entry) {
+                        let name = entry.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("Unknown");
+                        skills.push((name.to_string(), content));
+                    }
+                }
+            }
+        }
+        skills
     }
 
     fn compose_system_prompt(
@@ -208,23 +228,14 @@ impl Repl {
             }
         }.to_string();
 
-        intro.push_str("\n\n<workflow_hint>\nIf you need domain knowledge to write better code (e.g., specific framework best practices, UI design aesthetics), you can use bash to search or install skills BEFORE writing code:\n`npx --yes skills add <owner/repo> --skill <name> -y` (e.g. npx --yes skills add anthropics/skills --skill frontend-design -y).\nAfter downloading, read the installed `.agents/skills/<name>/SKILL.md` using `read_file` to understand the rules immediately.\n</workflow_hint>");
+        intro.push_str("\n\n<workflow_hint>\nIf you need domain knowledge (e.g. best practices, UI design), you MUST use bash to install skills BEFORE writing code:\n`npx --yes skills add <owner/repo> --skill <name> -y` (e.g. npx --yes skills add anthropics/skills --skill frontend-design -y).\nCrucially, to save context memory, if a currently installed skill is no longer relevant to the user's prompt, YOU MUST uninstall it using:\n`npx --yes skills rm <name> -y`.\n</workflow_hint>");
 
-        let mut loaded_skills = String::new();
-        let pattern = root.join(".agents").join("skills").join("*").join("SKILL.md");
-        if let Some(glob_str) = pattern.to_str() {
-            if let Ok(paths) = glob::glob(glob_str) {
-                for entry in paths.flatten() {
-                    if let Ok(content) = std::fs::read_to_string(&entry) {
-                        let name = entry.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).unwrap_or("Unknown");
-                        loaded_skills.push_str(&format!("\n\n--- SKILL: {} ---\n{}", name, content));
-                    }
-                }
-            }
-        }
-        if !loaded_skills.is_empty() {
+        let skills = Self::get_installed_skills(root);
+        if !skills.is_empty() {
             intro.push_str("\n\n<installed_skills>\nYou have the following domain skills installed natively. Apply these rules stringently in your solutions:\n");
-            intro.push_str(&loaded_skills);
+            for (name, content) in skills {
+                intro.push_str(&format!("\n\n--- SKILL: {} ---\n{}", name, content));
+            }
             intro.push_str("\n</installed_skills>");
         }
 
@@ -316,10 +327,16 @@ impl Repl {
     pub async fn run(&mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
+        let skills = Self::get_installed_skills(&self.workspace_root)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+
         banner::print_welcome(
             env!("CARGO_PKG_VERSION"),
             &self.client.model,
             &self.workspace_root,
+            &skills,
         );
 
         loop {
@@ -716,6 +733,8 @@ impl Repl {
         stdout: &mut io::Stdout,
     ) -> Vec<Message> {
         let mut results = Vec::new();
+        let mut tool_log: Vec<String> = Vec::new();
+        let mut printed_compact = false;
 
         for call in calls {
             let name = &call.function.name;
@@ -766,11 +785,10 @@ impl Repl {
 
             let is_bash = name == "bash";
 
-            if !is_bash {
-                // Print: ⚙ read_file(path="src/main.rs") — Claude-style visible tool use
-                print!("    {} {}(", "⚙".cyan(), name.bold());
-                if let Some(obj) = args.as_object() {
-                    let summary: Vec<String> = obj
+            // Build a short label for this tool call
+            let tool_label = if !is_bash {
+                let args_str = if let Some(obj) = args.as_object() {
+                    let parts: Vec<String> = obj
                         .iter()
                         .take(2)
                         .map(|(k, v)| {
@@ -779,21 +797,67 @@ impl Repl {
                             format!("{k}={short:?}")
                         })
                         .collect();
-                    print!("{}", summary.join(", ").dimmed());
+                    parts.join(", ")
+                } else {
+                    String::new()
+                };
+                format!("{}({})", name, args_str)
+            } else {
+                String::new()
+            };
+
+            if !is_bash {
+                if self.verbose_tools {
+                    // Verbose: each tool on its own permanent line
+                    print!("    {} {}  ", "⚙".cyan(), tool_label.bold());
+                    let _ = stdout.flush();
+                } else {
+                    // Compact: rewrite a single line showing the last 2 tools
+                    tool_log.push(tool_label.clone());
+                    if printed_compact {
+                        use crossterm::{cursor, execute as cexec};
+                        let _ = cexec!(stdout, cursor::MoveToPreviousLine(1));
+                    }
+                    let show: Vec<&String> = tool_log.iter().rev().take(2).rev().collect();
+                    let display = show
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join("  →  ");
+                    let prefix = if tool_log.len() > 2 {
+                        format!("({} done) ", tool_log.len() - show.len())
+                    } else {
+                        String::new()
+                    };
+                    use crossterm::{
+                        execute as cexec,
+                        style::Print,
+                        terminal::{self, ClearType},
+                    };
+                    let _ = cexec!(
+                        stdout,
+                        terminal::Clear(ClearType::CurrentLine),
+                        Print(format!(
+                            "    {} {}{}",
+                            "⚙".cyan(),
+                            prefix.dimmed(),
+                            display.truecolor(180, 180, 180)
+                        ))
+                    );
+                    println!();
+                    printed_compact = true;
                 }
-                print!(") ");
-                let _ = stdout.flush();
             }
 
             let output = match tools::dispatch(name, args).await {
                 Ok(out) => {
-                    if !is_bash {
+                    if !is_bash && self.verbose_tools {
                         println!("{}", "✓".green());
                     }
                     out
                 }
                 Err(e) => {
-                    if !is_bash {
+                    if !is_bash && self.verbose_tools {
                         println!("{}", "✗".red());
                     }
                     format!("Error executing {name}: {e}")
@@ -801,6 +865,11 @@ impl Repl {
             };
 
             results.push(Message::tool_result(name.clone(), output));
+        }
+
+        // Compact mode: print final summary line
+        if !self.verbose_tools && printed_compact {
+            println!("    {} {} tool(s) done", "✓".green(), tool_log.len());
         }
 
         results
@@ -891,6 +960,14 @@ impl Repl {
                     self.mode.label().cyan().bold()
                 );
             }
+            SlashAction::ToggleVerboseTools => {
+                self.verbose_tools = !self.verbose_tools;
+                if self.verbose_tools {
+                    println!("{}", "  Verbose tool log: ON — all tool calls shown individually".cyan());
+                } else {
+                    println!("{}", "  Verbose tool log: OFF — compact mode (last 2 shown)".dimmed());
+                }
+            }
             SlashAction::ReadFile(path) => {
                 if path.is_empty() {
                     println!("{}", "Usage: /read <path>".dimmed());
@@ -956,6 +1033,7 @@ impl Repl {
                  /mode chat         — chat only, no tools\n\
                  /mode agent        — autonomous tool use (default)\n\
                  /mode plan         — show a numbered plan before executing\n\
+                 /verbose           — toggle compact/verbose tool call log (default: compact)\n\
                  /read <path>       — read a file and add it to context (works without tool models)\n\
                  /glob <pat> [dir]  — list matching paths, add to context\n\
                  /tree [path] [n]   — directory tree (default . depth 3), add to context\n\
@@ -1030,6 +1108,7 @@ impl Repl {
                     )),
                 }
             }
+            "/verbose" => Some(SlashAction::ToggleVerboseTools),
             _ => None,
         }
     }
