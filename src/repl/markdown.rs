@@ -21,12 +21,33 @@ fn style_text(
     blockquote_depth: u32,
 ) -> String {
     if in_code_block {
-        return text.to_string().dimmed().to_string();
+        // Add left border for each line inside code blocks
+        let lines: Vec<&str> = text.split('\n').collect();
+        let styled: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                format!(
+                    "  {} {}",
+                    "│".truecolor(60, 60, 70),
+                    line.truecolor(200, 200, 210)
+                )
+            })
+            .collect();
+        return styled.join("\n");
     }
     if let Some(level) = in_heading {
         let s = text.to_string();
         return match level {
-            HeadingLevel::H1 | HeadingLevel::H2 => s.cyan().bold().to_string(),
+            HeadingLevel::H1 => format!(
+                "{} {}",
+                "▌".truecolor(217, 119, 38),
+                s.truecolor(255, 255, 255).bold()
+            ),
+            HeadingLevel::H2 => format!(
+                "{} {}",
+                "▎".truecolor(217, 119, 38),
+                s.cyan().bold()
+            ),
             _ => s.bold().to_string(),
         };
     }
@@ -195,16 +216,34 @@ pub fn to_terminal(src: &str) -> String {
                 ensure_blank_line(&mut out);
                 in_code_block = true;
                 if let CodeBlockKind::Fenced(lang) = &kind {
-                    if !lang.is_empty() {
-                        out.push_str(&format!("{}", format!("```{lang}\n").dimmed()));
+                    let lang_str = lang.split_whitespace().next().unwrap_or("");
+                    if !lang_str.is_empty() {
+                        let label = format!(" {} ", lang_str);
+                        out.push_str(&format!(
+                            "  {}{}{}",
+                            "╭─".truecolor(60, 60, 70),
+                            label.truecolor(140, 140, 160),
+                            format!("{}\n", "─".repeat(40usize.saturating_sub(label.len()))).truecolor(60, 60, 70),
+                        ));
                     } else {
-                        out.push_str(&format!("{}", "```\n".dimmed()));
+                        out.push_str(&format!(
+                            "  {}\n",
+                            format!("╭{}", "─".repeat(42)).truecolor(60, 60, 70),
+                        ));
                     }
+                } else {
+                    out.push_str(&format!(
+                        "  {}\n",
+                        format!("╭{}", "─".repeat(42)).truecolor(60, 60, 70),
+                    ));
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
-                out.push_str(&format!("{}", "```\n".dimmed()));
+                out.push_str(&format!(
+                    "  {}\n",
+                    format!("╰{}", "─".repeat(42)).truecolor(60, 60, 70),
+                ));
             }
 
             Event::Start(Tag::Link { dest_url, .. }) => {
@@ -268,7 +307,12 @@ pub fn to_terminal(src: &str) -> String {
             }
 
             Event::Code(code) => {
-                out.push_str(&format!("`{}`", code).dimmed().to_string());
+                out.push_str(&format!(
+                    "{}{}{}",
+                    "`".truecolor(90, 90, 100),
+                    code.truecolor(220, 180, 100),
+                    "`".truecolor(90, 90, 100)
+                ));
             }
 
             Event::InlineMath(s) | Event::DisplayMath(s) => {
@@ -288,7 +332,7 @@ pub fn to_terminal(src: &str) -> String {
 
             Event::Rule => {
                 ensure_blank_line(&mut out);
-                out.push_str(&format!("{}\n", "────────────────".dimmed()));
+                out.push_str(&format!("{}\n", "─".repeat(40).truecolor(80, 60, 40)));
             }
 
             Event::TaskListMarker(checked) => {

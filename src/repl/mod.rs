@@ -34,7 +34,7 @@ const SYSTEM_PROMPT_CHAT_ONLY: &str = "\
 You are Allux, a local code assistant. This session is in chat-only mode: \
 Ollama does not expose tool calling for this model (e.g. many Gemma builds), so you cannot invoke read_file/grep yourself. \
 The user can load disk context with slash commands: `/read <path>` reads a file into the conversation; `/glob <pattern> [dir]` lists paths; `/tree [path] [depth]` shows a folder tree. \
-For broad questions (e.g. “read my files”, project status), Allux may auto-attach a tree + file list + key manifests before your reply—use that content; do not say you cannot read files when it is present. \
+For broad questions (e.g. \u{201c}read my files\u{201d}, project status), Allux may auto-attach a tree + file list + key manifests before your reply—use that content; do not say you cannot read files when it is present. \
 Those results appear as user messages—use them to answer. Also use the workspace snapshot below. \
 For shell steps, put each command in a fenced block with language bash or sh — the app will offer to run them; if the user accepts, the command output is stored in the conversation for your next reply. \
 For file changes, put the target path on the opening fence line after the language (e.g. ```rust src/lib.rs) or as // path: rel/path.rs inside the block. \
@@ -73,12 +73,12 @@ impl SessionMode {
     }
 }
 
-/// Spinner on stderr while the model has not emitted visible text yet (Claude-style “Thinking…”).
+/// Spinner on stderr while the model has not emitted visible text yet.
 fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        const FRAMES: &[char] = &['|', '/', '-', '\\'];
+        const FRAMES: &[char] = &['\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280F}'];
         let mut i = 0usize;
-        let mut tick = tokio::time::interval(Duration::from_millis(120));
+        let mut tick = tokio::time::interval(Duration::from_millis(80));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         let mut stderr = io::stderr();
         while active.load(Ordering::Relaxed) {
@@ -88,11 +88,9 @@ fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
             }
             let c = FRAMES[i % FRAMES.len()];
             i += 1;
-            let _ = write!(
-                stderr,
-                "\r\x1b[K{}",
-                banner::accent_dim(&format!("{c}  Thinking…"))
-            );
+            let spin_char = format!("{}", c).truecolor(217, 119, 38);
+            let label = "Thinking\u{2026}".truecolor(180, 100, 45).dimmed();
+            let _ = write!(stderr, "\r\x1b[K  {spin_char}  {label}");
             let _ = stderr.flush();
         }
         let _ = write!(stderr, "\r\x1b[K");
@@ -283,7 +281,7 @@ impl Repl {
         }
     }
 
-    /// When the model will not receive tools this turn, expand “read project / status” asks.
+    /// When the model will not receive tools this turn, expand "read project / status" asks.
     fn wrap_user_input_with_auto_scan(&self, input: &str) -> String {
         let agent_will_use_tools = matches!(self.mode, SessionMode::Agent | SessionMode::Plan)
             && self.model_supports_tools;
@@ -340,11 +338,8 @@ impl Repl {
         );
 
         loop {
-            println!(
-                "{}",
-                banner::accent("────────────────────────────────────────────────────────────────────────")
-            );
-            let prompt = banner::accent(">").bold().to_string();
+            println!("{}", banner::divider());
+            let prompt = banner::accent("❯").bold().to_string();
             let input = match self.input.read_line(&prompt, 1, Some(banner::INPUT_FOOTER)) {
                 Ok(Some(s)) if !s.is_empty() => s,
                 Ok(Some(_)) => continue,
@@ -387,7 +382,7 @@ impl Repl {
         let tools = tools::all_definitions();
 
         for _round in 0..MAX_TOOL_ROUNDS {
-            print!("{} ", banner::accent("●").bold());
+            print!("{}", banner::response_prefix());
             let _ = stdout.flush();
 
             let mut streamed_text = String::new();
@@ -495,10 +490,11 @@ impl Repl {
                 Ok(LlmResponse::ToolCalls { calls, stats }) => {
                     println!();
                     if !calls.is_empty() {
+                        let tool_names: Vec<&str> = calls.iter().map(|c| c.function.name.as_str()).collect();
                         println!(
                             "  {} {}",
-                            banner::accent("◇"),
-                            format!("Using {} tool(s)…", calls.len()).dimmed()
+                            "⚡".truecolor(217, 119, 38),
+                            format!("{}", tool_names.join(" → ")).truecolor(140, 140, 160)
                         );
                         banner::print_token_usage(&stats);
                     }
@@ -745,13 +741,10 @@ impl Repl {
                 let command = args["command"].as_str().unwrap_or("(unknown)");
 
                 if !self.permissions.is_session_granted(command) {
-                    println!();
-                    println!("  {} bash command:", "⚠".yellow().bold());
-                    println!("  {}", format!("> {command}").bold());
+                    banner::print_permission_bash(command);
 
-                    const PERM_PROMPT: &str =
-                        "  Allow? [y] once  [s] session  [a] all of this type (family)  [n] deny: ";
-                    let vis = PERM_PROMPT.chars().count();
+                    const PERM_PROMPT: &str = "  ❯ ";
+                    let vis = 4;
 
                     let (decision, raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
                         Ok(Some(s)) => (PermissionStore::parse_input(&s), s),
@@ -816,25 +809,18 @@ impl Repl {
             };
 
             if !is_bash {
+                tool_log.push(tool_label.clone());
                 if self.verbose_tools {
-                    // Verbose: each tool on its own permanent line
-                    print!("    {} {}  ", "⚙".cyan(), tool_label.bold());
+                    print!("    {} {}  ", "▸".truecolor(100, 180, 255), tool_label.truecolor(180, 180, 190));
                     let _ = stdout.flush();
                 } else {
-                    // Compact: rewrite a single line showing the last 2 tools
-                    tool_log.push(tool_label.clone());
+                    // Compact: rewrite a single line showing the last tool
                     if printed_compact {
                         use crossterm::{cursor, execute as cexec};
                         let _ = cexec!(stdout, cursor::MoveToPreviousLine(1));
                     }
-                    let show: Vec<&String> = tool_log.iter().rev().take(2).rev().collect();
-                    let display = show
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join("  →  ");
-                    let prefix = if tool_log.len() > 2 {
-                        format!("({} done) ", tool_log.len() - show.len())
+                    let counter = if tool_log.len() > 1 {
+                        format!("[{}/{}] ", tool_log.len(), calls.len())
                     } else {
                         String::new()
                     };
@@ -848,9 +834,9 @@ impl Repl {
                         terminal::Clear(ClearType::CurrentLine),
                         Print(format!(
                             "    {} {}{}",
-                            "⚙".cyan(),
-                            prefix.dimmed(),
-                            display.truecolor(180, 180, 180)
+                            "▸".truecolor(100, 180, 255),
+                            counter.truecolor(100, 100, 120),
+                            tool_label.truecolor(140, 140, 160)
                         ))
                     );
                     println!();
@@ -876,9 +862,20 @@ impl Repl {
             results.push(Message::tool_result(name.clone(), output));
         }
 
-        // Compact mode: print final summary line
+        // Compact mode: overwrite last line with final summary
         if !self.verbose_tools && printed_compact {
-            println!("    {} {} tool(s) done", "✓".green(), tool_log.len());
+            use crossterm::{cursor, execute as cexec, style::Print, terminal::{self, ClearType}};
+            let _ = cexec!(stdout, cursor::MoveToPreviousLine(1));
+            let _ = cexec!(
+                stdout,
+                terminal::Clear(ClearType::CurrentLine),
+                Print(format!(
+                    "    {} {} tool(s) completed",
+                    "✓".green(),
+                    tool_log.len()
+                ))
+            );
+            println!();
         }
 
         results
@@ -1046,7 +1043,7 @@ impl Repl {
                  /read <path>       — read a file and add it to context (works without tool models)\n\
                  /glob <pat> [dir]  — list matching paths, add to context\n\
                  /tree [path] [n]   — directory tree (default . depth 3), add to context\n\
-                 (Broad “read project / status” questions auto-attach tree + key files when tools are off.)\n\
+                 (Broad \u{201c}read project / status\u{201d} questions auto-attach tree + key files when tools are off.)\n\
                  Chat / no tools: ```bash blocks — run offers; ```lang path/file.md — save uses path (confirm Y/n).\n\
                  Ctrl+C             — clear the current input line"
                     .into(),

@@ -17,8 +17,8 @@ pub async fn run_bash(command: &str) -> Result<String> {
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let cmd_disp = if command.len() > 40 { format!("{}...", &command[..40]) } else { command.to_string() };
-    let initial_msg = format!("{} {}(command={:?})", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed());
+    let cmd_disp = if command.len() > 50 { format!("{}…", &command[..49]) } else { command.to_string() };
+    let initial_msg = format!("{} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).bold());
     spinner.set_message(initial_msg.clone());
 
     let mut child = tokio::process::Command::new(shell())
@@ -62,8 +62,8 @@ pub async fn run_bash(command: &str) -> Result<String> {
         loop {
             tokio::select! {
                 Some((is_err, line)) = rx.recv() => {
-                    let display_line = if line.len() > 70 { format!("{}...", &line[..67]) } else { line.clone() };
-                    spinner.set_message(format!("{}\n    ╰─ {}", initial_msg, display_line.dimmed()));
+                    let display_line = if line.len() > 60 { format!("{}…", &line[..59]) } else { line.clone() };
+                    spinner.set_message(format!("{}\n    {} {}", initial_msg, "│".truecolor(60, 60, 70), display_line.truecolor(120, 120, 130)));
                     
                     if is_err {
                         all_stderr.push_str(&line);
@@ -93,11 +93,11 @@ pub async fn run_bash(command: &str) -> Result<String> {
     };
 
     if timed_out {
-        println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "⌛ timeout".yellow());
+        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "⌛ timeout".yellow());
     } else if exit_code == 0 {
-        println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "✓".green());
+        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "✓".green());
     } else {
-        println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "✗".red());
+        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), format!("✗ exit {}", exit_code).red());
     }
 
     let mut result = String::new();

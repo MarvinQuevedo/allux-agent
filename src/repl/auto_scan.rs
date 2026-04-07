@@ -1,4 +1,4 @@
-//! When the model cannot use tools, detect “read my project / status” style asks
+//! When the model cannot use tools, detect "read my project / status" style asks
 //! and attach a bounded tree + glob + key file contents before calling the LLM.
 
 use std::collections::BTreeSet;
@@ -9,7 +9,7 @@ use anyhow::Result;
 use crate::tools;
 
 const MAX_SCAN_BYTES: usize = 100_000;
-/// Max paths listed in the combined “source files” section (after filtering).
+/// Max paths listed in the combined "source files" section (after filtering).
 const MAX_LISTED_PATHS: usize = 280;
 
 /// Path segments that usually mean dependencies / build output — skip in globs.
@@ -33,7 +33,7 @@ const SKIP_DIR_MARKERS: &[&str] = &[
     "/.gradle/",
 ];
 
-/// Globs for “source-like” files we list (not file contents — just paths). Order: roughly by stack.
+/// Globs for "source-like" files we list (not file contents — just paths). Order: roughly by stack.
 const SOURCE_GLOBS: &[&str] = &[
     "**/*.rs",
     "**/*.py",

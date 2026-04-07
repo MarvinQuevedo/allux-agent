@@ -1,4 +1,5 @@
 use anyhow::Result;
+use colored::Colorize;
 
 pub fn run_edit_file(path: &str, old_str: &str, new_str: &str) -> Result<String> {
     let content = std::fs::read_to_string(path)
@@ -16,11 +17,46 @@ pub fn run_edit_file(path: &str, old_str: &str, new_str: &str) -> Result<String>
         );
     }
 
+    // Print visual diff before applying
+    print_diff(path, old_str, new_str);
+
     let new_content = content.replacen(old_str, new_str, 1);
     std::fs::write(path, &new_content)
         .map_err(|e| anyhow::anyhow!("Cannot write '{path}': {e}"))?;
 
     Ok(format!("Edited '{path}' successfully."))
+}
+
+/// Print a colored inline diff for the edit operation.
+fn print_diff(path: &str, old_str: &str, new_str: &str) {
+    let border = "│".truecolor(60, 60, 70);
+    let top = format!("╭─ {} {}", "edit".truecolor(140, 140, 160), path.cyan());
+    let bottom = format!("╰{}", "─".repeat(42)).truecolor(60, 60, 70);
+
+    println!("    {}", top.truecolor(60, 60, 70));
+
+    let max_lines = 6;
+    let old_lines: Vec<&str> = old_str.lines().collect();
+    let new_lines: Vec<&str> = new_str.lines().collect();
+
+    for (i, line) in old_lines.iter().enumerate() {
+        if i >= max_lines {
+            println!("    {} {}", border, "  … (more lines)".dimmed());
+            break;
+        }
+        let display = if line.len() > 60 { &line[..60] } else { line };
+        println!("    {} {}", border, format!("- {display}").red());
+    }
+    for (i, line) in new_lines.iter().enumerate() {
+        if i >= max_lines {
+            println!("    {} {}", border, "  … (more lines)".dimmed());
+            break;
+        }
+        let display = if line.len() > 60 { &line[..60] } else { line };
+        println!("    {} {}", border, format!("+ {display}").green());
+    }
+
+    println!("    {}", bottom);
 }
 
 #[cfg(test)]

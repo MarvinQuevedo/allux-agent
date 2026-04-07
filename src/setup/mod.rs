@@ -99,18 +99,31 @@ pub async fn run_wizard() -> Result<Config> {
 }
 
 fn print_banner() {
+    // Same pixel-art ALLUX logo as the REPL, with El Salvador flag gradient.
+    const LOGO: [&str; 5] = [
+        "   ██    ██       ██       ██    ██ ██    ██",
+        "  ████   ██       ██       ██    ██  ██  ██ ",
+        " ██  ██  ██       ██       ██    ██   ████  ",
+        "████████ ██       ██       ██    ██  ██  ██ ",
+        "██    ██ ████████ ████████  ██████  ██    ██",
+    ];
+    const COLORS: [(u8, u8, u8); 5] = [
+        ( 80, 140, 240),  // bright blue (top)
+        (120, 170, 240),  // light blue
+        (240, 245, 255),  // white (center)
+        (120, 170, 240),  // light blue
+        ( 80, 140, 240),  // bright blue (bottom)
+    ];
+
     println!();
-    println!("{}", "  ██████╗ ██╗     ██╗     ███████╗██████╗  ██████╗ ".cyan());
-    println!("{}", " ██╔═══██╗██║     ██║     ██╔════╝██╔══██╗██╔═══██╗".cyan());
-    println!("{}", " ██║   ██║██║     ██║     █████╗  ██████╔╝██║   ██║".cyan());
-    println!("{}", " ██║   ██║██║     ██║     ██╔══╝  ██╔══██╗██║   ██║".cyan());
-    println!("{}", " ╚██████╔╝███████╗███████╗███████╗██║  ██║╚██████╔╝".cyan());
-    println!("{}", "  ╚═════╝ ╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ".cyan());
+    for (line, &(r, g, b)) in LOGO.iter().zip(COLORS.iter()) {
+        println!("  {}", line.truecolor(r, g, b).bold());
+    }
     println!();
-    println!("{}", "  Local code agent powered by Ollama".bold());
-    println!("{}", "  ─────────────────────────────────────".dimmed());
+    println!("  {}", "Local code agent powered by Ollama".bold());
+    println!("  {}", "─────────────────────────────────────────────".truecolor(217, 119, 38));
     println!();
-    println!("{}", "  Welcome! First-time setup — takes 30 seconds.".bold());
+    println!("  {}", "Welcome! First-time setup — takes 30 seconds.".bold());
     println!();
 }
 
@@ -165,7 +178,7 @@ fn select_model(models: &[crate::ollama::types::ModelInfo]) -> Result<String> {
     terminal::enable_raw_mode()?;
     let mut stdout = stdout();
 
-    draw_model_list(&mut stdout, models, selected)?;
+    draw_model_list(&mut stdout, models, selected, false)?;
 
     loop {
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -181,13 +194,13 @@ fn select_model(models: &[crate::ollama::types::ModelInfo]) -> Result<String> {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if selected > 0 {
                             selected -= 1;
-                            draw_model_list(&mut stdout, models, selected)?;
+                            draw_model_list(&mut stdout, models, selected, true)?;
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if selected < models.len() - 1 {
                             selected += 1;
-                            draw_model_list(&mut stdout, models, selected)?;
+                            draw_model_list(&mut stdout, models, selected, true)?;
                         }
                     }
                     KeyCode::Enter => break,
@@ -221,28 +234,36 @@ fn draw_model_list(
     stdout: &mut std::io::Stdout,
     models: &[crate::ollama::types::ModelInfo],
     selected: usize,
+    is_redraw: bool,
 ) -> Result<()> {
-    static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-    if !FIRST.swap(false, std::sync::atomic::Ordering::Relaxed) {
+    if is_redraw {
         execute!(stdout, cursor::MoveUp(models.len() as u16))?;
     }
 
     for (i, model) in models.iter().enumerate() {
         let size_info = format!("{} {}", model.details.parameter_size, model.details.quantization_level);
-        if i == selected {
-            println!(
+        let line = if i == selected {
+            format!(
                 "  {} {}  {}",
-                "▶".cyan().bold(),
+                "\u{25B6}".cyan().bold(),
                 model.name.bold(),
                 size_info.dimmed()
-            );
+            )
         } else {
-            println!(
+            format!(
                 "    {}  {}",
                 model.name.dimmed(),
                 size_info.dimmed()
-            );
-        }
+            )
+        };
+        // In raw mode \n does NOT return to column 0, so use crossterm.
+        execute!(
+            stdout,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine),
+            crossterm::style::Print(line),
+            cursor::MoveToNextLine(1),
+        )?;
     }
     stdout.flush()?;
     Ok(())
