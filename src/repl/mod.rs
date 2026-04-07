@@ -116,7 +116,7 @@ fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
         if active.load(Ordering::Relaxed) {
             let c = FRAMES[0];
             let spin_char = format!("{c}").truecolor(100, 149, 237);
-            let label = "Thinking\u{2026}".truecolor(70, 110, 180).dimmed();
+            let label = "Thinking\u{2026}".truecolor(180, 160, 100);
             let _ = write!(stdout, "\r\x1b[K  {spin_char}  {label}");
             let _ = stdout.flush();
             i = 1;
@@ -133,7 +133,7 @@ fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
             let c = FRAMES[i % FRAMES.len()];
             i += 1;
             let spin_char = format!("{c}").truecolor(100, 149, 237);
-            let label = "Thinking\u{2026}".truecolor(70, 110, 180).dimmed();
+            let label = "Thinking\u{2026}".truecolor(180, 160, 100);
             let _ = write!(stdout, "\r\x1b[K  {spin_char}  {label}");
             let _ = stdout.flush();
         }

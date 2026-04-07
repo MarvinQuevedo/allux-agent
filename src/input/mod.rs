@@ -362,7 +362,7 @@ fn redraw(
     let ghost_suffix = match ghost {
         Some(g) if g.len() > content.len() => {
             let suffix = &g[content.len()..];
-            format!("{}", suffix.truecolor(140, 140, 170))
+            format!("{}", suffix.truecolor(100, 180, 220))
         }
         _ => String::new(),
     };
