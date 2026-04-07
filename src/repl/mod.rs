@@ -750,14 +750,14 @@ impl Repl {
                     println!("  {}", format!("> {command}").bold());
 
                     const PERM_PROMPT: &str =
-                        "  Allow? [y] once  [s] session  [n] deny: ";
+                        "  Allow? [y] once  [s] session  [a] all of this type (family)  [n] deny: ";
                     let vis = PERM_PROMPT.chars().count();
 
-                    let decision = match self.input.read_line(PERM_PROMPT, vis, None) {
-                        Ok(Some(s)) => PermissionStore::parse_input(&s),
+                    let (decision, raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
+                        Ok(Some(s)) => (PermissionStore::parse_input(&s), s),
                         Ok(None) | Err(_) => {
                             use crate::permissions::Decision;
-                            Decision::Deny
+                            (Decision::Deny, String::new())
                         }
                     };
 
@@ -767,14 +767,23 @@ impl Repl {
                             self.permissions.grant_session(command);
                             // fall through to dispatch
                         }
+                        Decision::AllowFamily => {
+                            self.permissions.grant_family(command);
+                            // fall through to dispatch
+                        }
                         Decision::AllowOnce => {
                             // fall through to dispatch, no grant stored
                         }
                         Decision::Deny => {
                             println!("  {}", "✗ denied".red());
+                            let msg = if raw.trim().is_empty() || raw.trim().to_lowercase() == "n" || raw.trim().to_lowercase() == "no" {
+                                "Permission denied: user rejected the bash command.".to_string()
+                            } else {
+                                format!("Permission denied: user rejected the bash command with response: '{}'", raw.trim())
+                            };
                             results.push(Message::tool_result(
                                 name.clone(),
-                                "Permission denied: user rejected the bash command.",
+                                msg,
                             ));
                             continue;
                         }

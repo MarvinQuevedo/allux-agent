@@ -5,7 +5,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const MAX_OUTPUT_BYTES: usize = 20_000;
-const TIMEOUT_SECS: u64 = 30;
+const TIMEOUT_SECS: u64 = 60;
 
 pub async fn run_bash(command: &str) -> Result<String> {
     let spinner = ProgressBar::new_spinner();
@@ -54,32 +54,47 @@ pub async fn run_bash(command: &str) -> Result<String> {
     let mut all_stdout = String::new();
     let mut all_stderr = String::new();
 
-    let child_future = async {
-        while let Some((is_err, line)) = rx.recv().await {
-            let display_line = if line.len() > 70 { format!("{}...", &line[..67]) } else { line.clone() };
-            spinner.set_message(format!("{}\n    ╰─ {}", initial_msg, display_line.dimmed()));
-            
-            if is_err {
-                all_stderr.push_str(&line);
-                all_stderr.push('\n');
-            } else {
-                all_stdout.push_str(&line);
-                all_stdout.push('\n');
+    let mut timed_out = false;
+    let exit_status = {
+        let mut child_wait = Box::pin(child.wait());
+        let mut timeout_gate = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(TIMEOUT_SECS)));
+        
+        loop {
+            tokio::select! {
+                Some((is_err, line)) = rx.recv() => {
+                    let display_line = if line.len() > 70 { format!("{}...", &line[..67]) } else { line.clone() };
+                    spinner.set_message(format!("{}\n    ╰─ {}", initial_msg, display_line.dimmed()));
+                    
+                    if is_err {
+                        all_stderr.push_str(&line);
+                        all_stderr.push('\n');
+                    } else {
+                        all_stdout.push_str(&line);
+                        all_stdout.push('\n');
+                    }
+                }
+                status = &mut child_wait => {
+                    break status.map(Some).map_err(|e| anyhow::anyhow!("Failed to wait on command: {e}"));
+                }
+                _ = &mut timeout_gate => {
+                    timed_out = true;
+                    break Ok(None);
+                }
             }
         }
-        child.wait().await
     };
-
-    let exit_status = tokio::time::timeout(std::time::Duration::from_secs(TIMEOUT_SECS), child_future)
-        .await
-        .map_err(|_| anyhow::anyhow!("Command timed out after {TIMEOUT_SECS}s: {command}"))?
-        .map_err(|e| anyhow::anyhow!("Failed to wait on command: {e}"))?;
-
-    let exit_code = exit_status.code().unwrap_or(-1);
 
     spinner.finish_and_clear();
     
-    if exit_code == 0 {
+    let exit_code = if timed_out {
+        -1
+    } else {
+        exit_status?.unwrap().code().unwrap_or(-1)
+    };
+
+    if timed_out {
+        println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "⌛ timeout".yellow());
+    } else if exit_code == 0 {
         println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "✓".green());
     } else {
         println!("    {} {}(command={:?}) {}", "⚙".cyan(), "bash".bold(), cmd_disp.dimmed(), "✗".red());
@@ -99,7 +114,10 @@ pub async fn run_bash(command: &str) -> Result<String> {
         result.push_str("[stderr]\n");
         result.push_str(&err_trunc);
     }
-    if exit_code != 0 {
+
+    if timed_out {
+        result.push_str(&format!("\n[Command timed out after {TIMEOUT_SECS}s. It may still be running in the background.]"));
+    } else if exit_code != 0 {
         result.push_str(&format!("\n[exit code: {exit_code}]"));
     }
 
