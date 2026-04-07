@@ -116,10 +116,24 @@ impl OllamaClient {
         }
 
         if !tool_calls.is_empty() {
-            Ok(LlmResponse::ToolCalls { calls: tool_calls, stats })
+            Ok(LlmResponse::ToolCalls { calls: tool_calls, text: text_buf, stats })
         } else {
             Ok(LlmResponse::Text { content: text_buf, stats })
         }
+    }
+
+    /// Unload the current model from Ollama memory (VRAM/RAM) by setting `keep_alive` to 0.
+    pub async fn unload_model(&self) -> Result<()> {
+        self.http
+            .post(format!("{}/api/generate", self.base_url))
+            .json(&serde_json::json!({
+                "model": self.model,
+                "keep_alive": 0
+            }))
+            .send()
+            .await
+            .context("Failed to unload model from Ollama")?;
+        Ok(())
     }
 
     /// List all locally available models.

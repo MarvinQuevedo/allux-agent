@@ -273,6 +273,12 @@ pub fn print_permission_edit(path: &str, old: &str, new: &str) {
     println!("{}", box_bottom());
 }
 
+/// Real-time system metrics for the status bar.
+pub struct MetricsInfo {
+    pub cpu_usage: f32,
+    pub ram_display: String,
+}
+
 /// Context usage info for the status bar.
 pub struct ContextInfo<'a> {
     pub used_chars: usize,
@@ -281,8 +287,8 @@ pub struct ContextInfo<'a> {
     pub model: &'a str,
 }
 
-/// Horizontal divider with context status bar between conversation turns.
-pub fn divider_with_context(ctx: &ContextInfo) -> String {
+/// Horizontal divider with context status bar and optional system metrics.
+pub fn divider_with_context(ctx: &ContextInfo, metrics: Option<&MetricsInfo>) -> String {
     let used_tokens = (ctx.used_chars + 3) / 4;
     let total_tokens = ctx.context_size as usize;
     let pct = if ctx.budget_chars > 0 {
@@ -332,15 +338,37 @@ pub fn divider_with_context(ctx: &ContextInfo) -> String {
         (220, 70, 70)
     };
 
+    // ── System metrics segment ──
+    let metrics_segment = if let Some(m) = metrics {
+        let cpu_pct = m.cpu_usage;
+        let (cr, cg, cb) = if cpu_pct < 60.0 {
+            (100, 200, 100) // green
+        } else if cpu_pct < 85.0 {
+            (220, 180, 60)  // yellow
+        } else {
+            (220, 70, 70)   // red
+        };
+        format!(
+            " {} {} {} {}",
+            "│".truecolor(50, 60, 80),
+            format!("CPU:{cpu_pct:.0}%").truecolor(cr, cg, cb),
+            "·".truecolor(50, 60, 80),
+            format!("RAM:{}", m.ram_display).truecolor(140, 180, 200),
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        "  {} {} {}{} {} {} {} {}",
+        "  {} {} {}{} {} {}{} {} {}",
         "──".truecolor(50, 60, 80),
         model_short.truecolor(140, 140, 160),
         bar_filled,
         bar_empty,
         format!("{used_display}/{total_display}").truecolor(140, 140, 160),
         pct_display.truecolor(pr, pg, pb),
-        "─".repeat(calc_pad(model_short, &used_display, &total_display, &pct_display, bar_width)).truecolor(50, 60, 80),
+        metrics_segment,
+        "─".repeat(calc_pad_with_metrics(model_short, &used_display, &total_display, &pct_display, bar_width, metrics.is_some())).truecolor(50, 60, 80),
         "──".truecolor(50, 60, 80),
     )
 }
@@ -355,10 +383,11 @@ fn fmt_k_tokens(n: usize) -> String {
 }
 
 /// Calculate remaining pad to fill ~60 chars.
-fn calc_pad(model: &str, used: &str, total: &str, pct: &str, bar_w: usize) -> usize {
-    // "  ── model ████░░░░ used/total pct ────── ──"
-    let content_len = 5 + model.len() + 1 + bar_w + 1 + used.len() + 1 + total.len() + 1 + pct.len() + 1 + 2;
-    60usize.saturating_sub(content_len)
+fn calc_pad_with_metrics(model: &str, used: &str, total: &str, pct: &str, bar_w: usize, has_metrics: bool) -> usize {
+    // "  ── model ████░░░░ used/total pct [│ CPU:XX% · RAM:X.X/XGB] ────── ──"
+    let base = 5 + model.len() + 1 + bar_w + 1 + used.len() + 1 + total.len() + 1 + pct.len() + 1 + 2;
+    let metrics_extra = if has_metrics { 28 } else { 0 }; // approximate width of metrics segment
+    60usize.saturating_sub(base + metrics_extra)
 }
 
 /// Prefix for assistant responses.

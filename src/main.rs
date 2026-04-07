@@ -5,6 +5,7 @@
 mod compression;
 mod config;
 mod input;
+mod monitor;
 mod ollama;
 mod permissions;
 mod repl;
@@ -35,6 +36,8 @@ async fn main() -> Result<()> {
     };
 
     let workspace_root = env::current_dir()?;
-    let mut repl = Repl::new(config, workspace_root);
+    let metrics = monitor::new_shared();
+    monitor::spawn_collector(metrics.clone());
+    let mut repl = Repl::new(config, workspace_root, metrics);
     repl.run().await
 }

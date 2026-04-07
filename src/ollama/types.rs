@@ -31,10 +31,10 @@ impl Message {
         }
     }
 
-    pub fn assistant_tool_calls(calls: Vec<ToolCallItem>) -> Self {
+    pub fn assistant_tool_calls(calls: Vec<ToolCallItem>, content: impl Into<String>) -> Self {
         Self {
             role: "assistant".into(),
-            content: String::new(),
+            content: content.into(),
             tool_calls: Some(calls),
             tool_name: None,
         }
@@ -143,8 +143,8 @@ pub struct ChunkMessage {
 pub enum LlmResponse {
     /// The model returned text.
     Text { content: String, stats: ResponseStats },
-    /// The model wants to call tools.
-    ToolCalls { calls: Vec<ToolCallItem>, stats: ResponseStats },
+    /// The model wants to call tools (may include reasoning text emitted before the calls).
+    ToolCalls { calls: Vec<ToolCallItem>, text: String, stats: ResponseStats },
 }
 
 /// Aggregated stats from a completed response

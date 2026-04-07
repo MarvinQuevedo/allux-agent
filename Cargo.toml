@@ -12,7 +12,10 @@ path = "src/main.rs"
 
 [dependencies]
 # HTTP client with streaming
+sysinfo = "0.30"
+# HTTP client with streaming
 reqwest = { version = "0.12", features = ["json", "stream"] }
+
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 # JSON serialization

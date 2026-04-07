@@ -10,6 +10,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::config::Config;
 use crate::input::InputReader;
+use crate::monitor::SharedMetrics;
 use crate::permissions::PermissionStore;
 
 mod auto_scan;
@@ -100,27 +101,30 @@ fn tool_call_detail(name: &str, args: &serde_json::Value) -> String {
     }
 }
 
+const SPINNER_FRAMES: &[char] = &[
+    '\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}',
+    '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280F}',
+];
+
 /// Spinner on stdout while the model has not emitted visible text yet.
 ///
-/// Renders immediately (no initial delay) so the user always sees feedback.
+/// The first frame is rendered **synchronously** (before the tokio task is
+/// even scheduled) so the user always sees "Thinking…" — even when Ollama
+/// responds very quickly after a tool round-trip.
 fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        const FRAMES: &[char] = &[
-            '\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}',
-            '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280F}',
-        ];
+    // Render the first frame synchronously, before spawning the async animator.
+    {
         let mut stdout = io::stdout();
-        let mut i = 0usize;
+        let c = SPINNER_FRAMES[0];
+        let spin_char = format!("{c}").truecolor(100, 149, 237);
+        let label = "Thinking\u{2026}".truecolor(180, 160, 100);
+        let _ = write!(stdout, "\r\x1b[K  {spin_char}  {label}");
+        let _ = stdout.flush();
+    }
 
-        // Render the first frame immediately (no tick delay).
-        if active.load(Ordering::Relaxed) {
-            let c = FRAMES[0];
-            let spin_char = format!("{c}").truecolor(100, 149, 237);
-            let label = "Thinking\u{2026}".truecolor(180, 160, 100);
-            let _ = write!(stdout, "\r\x1b[K  {spin_char}  {label}");
-            let _ = stdout.flush();
-            i = 1;
-        }
+    tokio::spawn(async move {
+        let mut stdout = io::stdout();
+        let mut i = 1usize; // frame 0 already rendered
 
         let mut tick = tokio::time::interval(Duration::from_millis(80));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -130,7 +134,7 @@ fn spawn_thinking_spinner(active: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
             if !active.load(Ordering::Relaxed) {
                 break;
             }
-            let c = FRAMES[i % FRAMES.len()];
+            let c = SPINNER_FRAMES[i % SPINNER_FRAMES.len()];
             i += 1;
             let spin_char = format!("{c}").truecolor(100, 149, 237);
             let label = "Thinking\u{2026}".truecolor(180, 160, 100);
@@ -165,6 +169,8 @@ pub struct Repl {
     permissions: PermissionStore,
     /// ID of the current session file (if saved/resumed).
     session_id: Option<String>,
+    /// Shared system metrics updated by the background collector.
+    metrics: SharedMetrics,
 }
 
 enum SlashAction {
@@ -202,6 +208,8 @@ enum SlashAction {
     CompressNow,
     /// AI-powered summarization: sends old messages to the LLM for semantic compression.
     CompressAi,
+    /// Unload the current model from Ollama VRAM/RAM.
+    UnloadModel,
 }
 
 /// `/tree`, `/tree src`, `/tree src 4`
@@ -238,7 +246,7 @@ fn parse_glob_slash_args(rest: &str) -> Option<(String, Option<String>)> {
 }
 
 impl Repl {
-    pub fn new(config: Config, workspace_root: PathBuf) -> Self {
+    pub fn new(config: Config, workspace_root: PathBuf, metrics: SharedMetrics) -> Self {
         let client = OllamaClient::new(&config.ollama_url, &config.model);
         let history = vec![Message::system(Self::compose_system_prompt(
             &workspace_root,
@@ -259,6 +267,7 @@ impl Repl {
             input: InputReader::new(),
             permissions: PermissionStore::new(&workspace_root),
             session_id: None,
+            metrics,
         }
     }
 
@@ -356,10 +365,17 @@ impl Repl {
         }
     }
 
-    /// Render a divider that includes context usage info.
+    /// Render a divider that includes context usage and system metrics.
     fn context_divider(&self) -> String {
         let ctx = self.context_info();
-        banner::divider_with_context(&ctx)
+        let sys_metrics = self.metrics.try_read().ok();
+        let metrics_info = sys_metrics.as_ref().map(|m| {
+            banner::MetricsInfo {
+                cpu_usage: m.cpu_usage,
+                ram_display: m.ram_display(),
+            }
+        });
+        banner::divider_with_context(&ctx, metrics_info.as_ref())
     }
 
     /// Evict old messages when history exceeds the context budget.
@@ -761,7 +777,7 @@ impl Repl {
                     return;
                 }
 
-                Ok(LlmResponse::ToolCalls { calls, stats }) => {
+                Ok(LlmResponse::ToolCalls { calls, text, stats }) => {
                     println!();
                     if !calls.is_empty() {
                         for call in &calls {
@@ -784,7 +800,9 @@ impl Repl {
                         }
                         banner::print_token_usage(&stats);
                     }
-                    self.history.push(Message::assistant_tool_calls(calls.clone()));
+                    // Preserve any reasoning text the model emitted alongside tool calls,
+                    // so it retains its own context on the next turn.
+                    self.history.push(Message::assistant_tool_calls(calls.clone(), &text));
                     let tool_messages = self.execute_tool_calls(&calls, stdout).await;
                     self.history.extend(tool_messages);
                 }
@@ -1256,7 +1274,7 @@ impl Repl {
                     self.model_supports_tools,
                 );
                 self.history = vec![Message::system(sys)];
-                println!("{}", "Conversation cleared.".dimmed());
+                println!("{}", "Conversation cleared (model stays loaded; use /unload to free VRAM).".dimmed());
             }
             SlashAction::ContextRefresh => match self.refresh_system_prompt_from_disk() {
                 Ok(()) => println!("{}", "Workspace context refreshed (cwd + snapshot).".dimmed()),
@@ -1550,6 +1568,12 @@ impl Repl {
                     }
                 }
             }
+            SlashAction::UnloadModel => {
+                match self.client.unload_model().await {
+                    Ok(()) => println!("{}", "  Model unloaded from VRAM/RAM.".dimmed()),
+                    Err(e) => eprintln!("{}", format!("  Could not unload model: {e}").red()),
+                }
+            }
         }
     }
 
@@ -1583,6 +1607,7 @@ impl Repl {
                  /compress manual   — no auto-compression; use '/compress now' to trigger\n\
                  /compress now      — manually compress history right now\n\
                  /compress ai       — use the LLM to semantically summarize old messages\n\
+                 /unload            — unload model from VRAM/RAM\n\
                  (Broad \u{201c}read project / status\u{201d} questions auto-attach tree + key files when tools are off.)\n\
                  Chat / no tools: ```bash blocks — run offers; ```lang path/file.md — save uses path (confirm Y/n).\n\
                  Ctrl+C             — clear the current input line"
@@ -1680,6 +1705,7 @@ impl Repl {
                     Some(SlashAction::ResumeSession(id))
                 }
             }
+            "/unload" => Some(SlashAction::UnloadModel),
             _ => None,
         }
     }
