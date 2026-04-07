@@ -494,6 +494,61 @@ pub fn build_eviction_summary(messages: &[(String, usize)]) -> String {
     )
 }
 
+// ── AI-powered summarization ──────────────────────────────────────────
+
+/// System prompt for the AI summarization call.
+const AI_SUMMARIZE_SYSTEM: &str = "\
+You are a context compressor. Your job is to summarize a conversation history \
+into a concise but complete summary that preserves ALL important information. \
+Include: what the user asked, what files were read/modified, what tools were called \
+and their key results, what decisions were made, what errors occurred, and what \
+the current state of work is. \
+Use bullet points. Be precise with file paths, function names, and error messages. \
+Do NOT add commentary or opinions — only factual summary. \
+Reply ONLY with the summary, no preamble.";
+
+/// Build the user prompt for AI summarization from a slice of messages.
+pub fn build_ai_summarize_prompt(messages: &[(String, String, Option<String>)]) -> String {
+    // messages = Vec<(role, content, tool_name)>
+    let mut prompt = String::from("Summarize this conversation history concisely:\n\n");
+
+    for (role, content, tool_name) in messages {
+        let label = match role.as_str() {
+            "user" => "USER",
+            "assistant" => "ASSISTANT",
+            "tool" => {
+                let tn = tool_name.as_deref().unwrap_or("unknown");
+                &format!("TOOL[{tn}]")
+            }
+            other => other,
+        };
+
+        // Truncate very long content for the summarization input itself
+        let max_content = 2000;
+        let display_content = if content.len() > max_content {
+            let head = safe_slice(content, 0, max_content / 2);
+            let tail = safe_slice_end(content, max_content / 4);
+            format!(
+                "{}...[{} chars omitted]...{}",
+                head,
+                content.len() - head.len() - tail.len(),
+                tail
+            )
+        } else {
+            content.clone()
+        };
+
+        prompt.push_str(&format!("--- {label} ---\n{display_content}\n\n"));
+    }
+
+    prompt
+}
+
+/// The system prompt to use for the summarization call.
+pub fn ai_summarize_system_prompt() -> &'static str {
+    AI_SUMMARIZE_SYSTEM
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

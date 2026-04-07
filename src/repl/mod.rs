@@ -156,6 +156,8 @@ enum SlashAction {
     CompressSetMode(CompressionMode),
     /// Manually trigger compression on current history now.
     CompressNow,
+    /// AI-powered summarization: sends old messages to the LLM for semantic compression.
+    CompressAi,
 }
 
 /// `/tree`, `/tree src`, `/tree src 4`
@@ -392,7 +394,77 @@ impl Repl {
         (before_total, self.history_char_count())
     }
 
-    /// Force compression on all compressible messages (used by `/compress now`).
+    /// AI-powered summarization: sends old messages to the LLM to produce
+    /// a semantic summary, then replaces them with it.
+    ///
+    /// Keeps the system prompt (index 0) and the last `keep_tail` messages.
+    /// Everything in between is summarized via an LLM call.
+    async fn compress_with_ai(&mut self) -> Result<(usize, usize)> {
+        let keep_tail = 6usize;
+        let min_keep = 1 + keep_tail;
+
+        if self.history.len() <= min_keep {
+            anyhow::bail!("Not enough messages to summarize (need more than {min_keep})");
+        }
+
+        let before_chars = self.history_char_count();
+        let summarize_end = self.history.len().saturating_sub(keep_tail);
+
+        // Collect messages to summarize (indices 1..summarize_end)
+        let messages_to_summarize: Vec<(String, String, Option<String>)> = self.history
+            [1..summarize_end]
+            .iter()
+            .map(|m| (m.role.clone(), m.content.clone(), m.tool_name.clone()))
+            .collect();
+
+        if messages_to_summarize.is_empty() {
+            anyhow::bail!("No messages to summarize");
+        }
+
+        let msg_count = messages_to_summarize.len();
+        let summarize_prompt = compression::build_ai_summarize_prompt(&messages_to_summarize);
+
+        // Call the LLM with a summarization prompt
+        let summarize_messages = vec![
+            Message::system(compression::ai_summarize_system_prompt().to_string()),
+            Message::user(summarize_prompt),
+        ];
+
+        let options = ChatOptions {
+            temperature: Some(0.1), // low temperature for factual summary
+            num_ctx: Some(self.config.context_size),
+        };
+
+        let mut summary_text = String::new();
+        let result = self
+            .client
+            .chat(&summarize_messages, None, Some(options), |chunk| {
+                summary_text.push_str(chunk);
+            })
+            .await;
+
+        match result {
+            Ok(_) if !summary_text.trim().is_empty() => {
+                // Build the compressed summary message
+                let summary = format!(
+                    "[AI-compressed context: {msg_count} messages summarized]\n\n{summary_text}"
+                );
+
+                // Rebuild history: system + summary + recent tail
+                let mut new_history = Vec::with_capacity(1 + 1 + keep_tail);
+                new_history.push(self.history[0].clone()); // system prompt
+                new_history.push(Message::system(summary));
+                new_history.extend_from_slice(&self.history[summarize_end..]);
+                self.history = new_history;
+
+                let after_chars = self.history_char_count();
+                Ok((before_chars, after_chars))
+            }
+            Ok(_) => anyhow::bail!("LLM returned empty summary"),
+            Err(e) => anyhow::bail!("AI summarization failed: {e}"),
+        }
+    }
+
     fn chat_options(&self) -> ChatOptions {
         ChatOptions {
             temperature: None,
@@ -1360,6 +1432,50 @@ impl Repl {
                     println!("{}", "  Nothing to compress — history is already compact.".dimmed());
                 }
             }
+            SlashAction::CompressAi => {
+                let msg_count = self.history.len();
+                if msg_count <= 7 {
+                    println!("{}", "  Not enough history to summarize (need more than 7 messages).".dimmed());
+                    return;
+                }
+                println!(
+                    "  {} Summarizing {} messages via {}…",
+                    "⚡".truecolor(217, 119, 38),
+                    msg_count - 7, // subtract system + keep_tail
+                    self.client.model.cyan()
+                );
+
+                let spin_active = Arc::new(AtomicBool::new(true));
+                let spinner = spawn_thinking_spinner(spin_active.clone());
+
+                let result = self.compress_with_ai().await;
+
+                finish_thinking_spinner(&spin_active, spinner).await;
+
+                match result {
+                    Ok((before, after)) => {
+                        let saved = before.saturating_sub(after);
+                        let pct = if before > 0 {
+                            ((saved as f64 / before as f64) * 100.0) as u32
+                        } else {
+                            0
+                        };
+                        println!(
+                            "  {} AI summary: {} → {} chars (−{} chars, ~{} tokens freed, −{}%)",
+                            "\u{2713}".green(),
+                            before, after, saved, saved / 4, pct
+                        );
+                        println!(
+                            "  {} History now: {} messages",
+                            "↘".truecolor(100, 180, 255),
+                            self.history.len()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("{}", format!("  Error: {e}").red());
+                    }
+                }
+            }
         }
     }
 
@@ -1392,6 +1508,7 @@ impl Repl {
                  /compress auto     — compress only when approaching context limit (default)\n\
                  /compress manual   — no auto-compression; use '/compress now' to trigger\n\
                  /compress now      — manually compress history right now\n\
+                 /compress ai       — use the LLM to semantically summarize old messages\n\
                  (Broad \u{201c}read project / status\u{201d} questions auto-attach tree + key files when tools are off.)\n\
                  Chat / no tools: ```bash blocks — run offers; ```lang path/file.md — save uses path (confirm Y/n).\n\
                  Ctrl+C             — clear the current input line"
@@ -1469,10 +1586,11 @@ impl Repl {
                 let rest = s.trim_start_matches("/compress ").trim();
                 match rest {
                     "now" => Some(SlashAction::CompressNow),
+                    "ai" | "summarize" => Some(SlashAction::CompressAi),
                     other => match CompressionMode::from_str_loose(other) {
                         Some(mode) => Some(SlashAction::CompressSetMode(mode)),
                         None => Some(SlashAction::Print(
-                            format!("Unknown compression mode '{other}'. Valid: always, auto, manual, now"),
+                            format!("Unknown compression mode '{other}'. Valid: always, auto, manual, now, ai"),
                         )),
                     },
                 }
