@@ -43,7 +43,7 @@ mod tests {
 
     #[test]
     fn test_read_file_not_found() {
-        let result = run_read_file("/tmp/ollero_nonexistent_xyz.txt");
+        let result = run_read_file("/tmp/allux_nonexistent_xyz.txt");
         assert!(result.is_err());
     }
 }

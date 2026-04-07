@@ -1,0 +1,7 @@
+# Sequential autonomous prompts (one per line).
+# Lines starting with # are ignored.
+
+Work only inside ./sandbox/sample-rust-app. Analyze current ./sandbox/sample-rust-app/src/lib.rs and summarize two concrete improvement opportunities.
+Work only inside ./sandbox/sample-rust-app. Refactor ./sandbox/sample-rust-app/src/lib.rs to reduce temporary allocations while preserving behavior. Then run cargo test in ./sandbox/sample-rust-app.
+Work only inside ./sandbox/sample-rust-app. Add one extra unit test for edge case input in ./sandbox/sample-rust-app/src/lib.rs and run cargo test again in ./sandbox/sample-rust-app.
+Work only inside ./sandbox/sample-rust-app. Provide a concise changelog of what you modified and why.

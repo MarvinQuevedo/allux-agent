@@ -128,6 +128,9 @@ pub fn should_trigger(msg: &str) -> bool {
         "que contiene",
         "resume el proyecto",
         "resumen del proyecto",
+        "lectura completa del proyecto",
+        "lectura completa del repositorio",
+        "lectura completa del repo",
     ];
 
     TRIGGERS.iter().any(|p| t.contains(p))
@@ -193,7 +196,7 @@ pub fn build_scan(root: &Path) -> Result<String> {
 
     let mut parts: Vec<String> = Vec::new();
     parts.push(
-        "## Auto-loaded project overview (read from disk by Ollero)\n\
+        "## Auto-loaded project overview (read from disk by Allux)\n\
          Use this to answer; do not claim you lack access to these paths."
             .to_string(),
     );

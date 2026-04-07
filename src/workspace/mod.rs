@@ -26,7 +26,7 @@ pub fn snapshot(root: &Path) -> String {
     let display_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     out.push_str(&format!(
         "- **Project root:** `{}`\n\
-         - Ollero reads this folder when it starts; run `/context refresh` after `cd` if you moved.\n\n",
+         - Allux reads this folder when it starts; run `/context refresh` after `cd` if you moved.\n\n",
         display_root.display()
     ));
 
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn snapshot_unreadable_dir_still_has_header() {
-        let dir = std::env::temp_dir().join("ollero_workspace_test_nonexistent_dir");
+        let dir = std::env::temp_dir().join("allux_workspace_test_nonexistent_dir");
         let _ = std::fs::remove_dir_all(&dir);
         let s = snapshot(&dir);
         assert!(s.contains("Workspace snapshot"));

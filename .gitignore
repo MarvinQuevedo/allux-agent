@@ -1,1 +1,11 @@
 /target
+/.allux-cli/runs/
+/sandbox/*
+
+ask*
+T0*
+
+/.claude/*
+/.agents/*
+/.continue/*
+/.ollero-cli/*
