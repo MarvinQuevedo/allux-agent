@@ -116,6 +116,8 @@ pub struct Repl {
     verbose_tools: bool,
     input: InputReader,
     permissions: PermissionStore,
+    /// ID of the current session file (if saved/resumed).
+    session_id: Option<String>,
 }
 
 enum SlashAction {
@@ -139,6 +141,12 @@ enum SlashAction {
         path: String,
         depth: usize,
     },
+    /// Save current session to disk.
+    SaveSession,
+    /// List saved sessions.
+    ListSessions,
+    /// Resume a saved session by ID.
+    ResumeSession(String),
 }
 
 /// `/tree`, `/tree src`, `/tree src 4`
@@ -186,12 +194,13 @@ impl Repl {
             client,
             history,
             config,
-            workspace_root,
+            workspace_root: workspace_root.clone(),
             mode: SessionMode::Agent,
             model_supports_tools: true,
             verbose_tools: false,
             input: InputReader::new(),
-            permissions: PermissionStore::new(),
+            permissions: PermissionStore::new(&workspace_root),
+            session_id: None,
         }
     }
 
@@ -272,6 +281,65 @@ impl Repl {
             self.history.push(Message::system(content));
         }
         Ok(())
+    }
+
+    /// Estimate total characters in conversation history.
+    fn history_char_count(&self) -> usize {
+        self.history.iter().map(|m| m.content.len()).sum()
+    }
+
+    /// Evict old messages when history exceeds the context budget.
+    ///
+    /// Strategy:
+    /// - Keep system prompt (index 0) always.
+    /// - Keep the last N messages in full (recent context).
+    /// - Summarize/evict oldest non-system messages when over budget.
+    ///
+    /// We estimate ~4 chars per token. With context_size tokens total,
+    /// we reserve 25% for response, so budget = context_size * 3 chars.
+    fn compact_history(&mut self) {
+        let budget_chars = (self.config.context_size as usize) * 3;
+        let current = self.history_char_count();
+
+        if current <= budget_chars {
+            return;
+        }
+
+        // Keep system prompt (first) and at least the last 6 messages.
+        let keep_tail = 6usize;
+        let min_keep = 1 + keep_tail; // system + tail
+
+        if self.history.len() <= min_keep {
+            return; // can't evict anything meaningful
+        }
+
+        // Evict oldest non-system messages until under budget.
+        // Replace evicted messages with a single summary marker.
+        let evict_end = self.history.len().saturating_sub(keep_tail);
+        let mut evicted_count = 0usize;
+        let mut evicted_roles = Vec::new();
+
+        // Collect what we're evicting (indices 1..evict_end)
+        for msg in &self.history[1..evict_end] {
+            evicted_roles.push(msg.role.clone());
+            evicted_count += 1;
+        }
+
+        if evicted_count == 0 {
+            return;
+        }
+
+        // Replace evicted range with a single summary message
+        let summary = format!(
+            "[Context compressed: {evicted_count} earlier messages evicted to fit context window. \
+             The conversation continues from the most recent messages below.]"
+        );
+
+        let mut new_history = Vec::with_capacity(1 + 1 + keep_tail);
+        new_history.push(self.history[0].clone()); // system
+        new_history.push(Message::system(summary));
+        new_history.extend_from_slice(&self.history[evict_end..]);
+        self.history = new_history;
     }
 
     fn chat_options(&self) -> ChatOptions {
@@ -366,6 +434,24 @@ impl Repl {
             println!();
         }
 
+        // Auto-save session on exit if there are user messages
+        let has_user_msgs = self.history.iter().any(|m| m.role == "user");
+        if has_user_msgs {
+            if let Ok(path) = crate::session::save(
+                &self.history,
+                &self.client.model,
+                &self.workspace_root,
+                self.session_id.as_deref(),
+            ) {
+                let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+                println!(
+                    "  {} Session auto-saved (id: {})",
+                    "\u{2713}".truecolor(100, 200, 100),
+                    id.truecolor(100, 180, 255)
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -382,6 +468,9 @@ impl Repl {
         let tools = tools::all_definitions();
 
         for _round in 0..MAX_TOOL_ROUNDS {
+            // Compact history if approaching context window limit
+            self.compact_history();
+
             print!("{}", banner::response_prefix());
             let _ = stdout.flush();
 
@@ -740,10 +829,10 @@ impl Repl {
             if name == "bash" {
                 let command = args["command"].as_str().unwrap_or("(unknown)");
 
-                if !self.permissions.is_session_granted(command) {
+                if !self.permissions.is_granted(command) {
                     banner::print_permission_bash(command);
 
-                    const PERM_PROMPT: &str = "  ❯ ";
+                    const PERM_PROMPT: &str = "  \u{276F} ";
                     let vis = 4;
 
                     let (decision, raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
@@ -756,19 +845,25 @@ impl Repl {
 
                     use crate::permissions::Decision;
                     match decision {
-                        Decision::AllowSession => {
-                            self.permissions.grant_session(command);
-                            // fall through to dispatch
-                        }
-                        Decision::AllowFamily => {
-                            self.permissions.grant_family(command);
-                            // fall through to dispatch
-                        }
                         Decision::AllowOnce => {
                             // fall through to dispatch, no grant stored
                         }
+                        Decision::AllowSession => {
+                            self.permissions.grant_session(command);
+                        }
+                        Decision::AllowFamily => {
+                            self.permissions.grant_family(command);
+                        }
+                        Decision::AllowWorkspace => {
+                            self.permissions.grant_workspace(command);
+                            println!("  {}", "Saved to workspace permissions.".truecolor(100, 200, 100));
+                        }
+                        Decision::AllowGlobal => {
+                            self.permissions.grant_global(command);
+                            println!("  {}", "Saved to global permissions.".truecolor(100, 200, 100));
+                        }
                         Decision::Deny => {
-                            println!("  {}", "✗ denied".red());
+                            println!("  {}", "\u{2717} denied".red());
                             let msg = if raw.trim().is_empty() || raw.trim().to_lowercase() == "n" || raw.trim().to_lowercase() == "no" {
                                 "Permission denied: user rejected the bash command.".to_string()
                             } else {
@@ -777,6 +872,60 @@ impl Repl {
                             results.push(Message::tool_result(
                                 name.clone(),
                                 msg,
+                            ));
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // ── Permission gate for edit_file / write_file ─────────────────────
+            if name == "edit_file" || name == "write_file" {
+                let path = args["path"].as_str().unwrap_or("(unknown)");
+                let perm_key = format!("{name}:{path}");
+
+                if !self.permissions.is_granted(&perm_key) {
+                    if name == "edit_file" {
+                        let old_str = args["old_str"].as_str().unwrap_or("");
+                        let new_str = args["new_str"].as_str().unwrap_or("");
+                        banner::print_permission_edit(path, old_str, new_str);
+                    } else {
+                        println!();
+                        println!("{}", banner::box_top_pub());
+                        println!("  {} {}", "Allux wants to write:".bold(), path.cyan().bold());
+                        println!("{}", banner::box_bottom_pub());
+                    }
+
+                    const PERM_PROMPT: &str = "  \u{276F} ";
+                    let vis = 4;
+                    let (decision, _raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
+                        Ok(Some(s)) => {
+                            // For file ops: y=allow, n=deny (simpler than bash)
+                            let d = match s.trim().to_lowercase().as_str() {
+                                "y" | "yes" | "" => crate::permissions::Decision::AllowOnce,
+                                "n" | "no" => crate::permissions::Decision::Deny,
+                                other => PermissionStore::parse_input(other),
+                            };
+                            (d, s)
+                        }
+                        Ok(None) | Err(_) => (crate::permissions::Decision::Deny, String::new()),
+                    };
+
+                    use crate::permissions::Decision;
+                    match decision {
+                        Decision::AllowOnce => {}
+                        Decision::AllowSession => self.permissions.grant_session(&perm_key),
+                        Decision::AllowFamily | Decision::AllowWorkspace => {
+                            self.permissions.grant_workspace(&perm_key);
+                        }
+                        Decision::AllowGlobal => {
+                            self.permissions.grant_global(&perm_key);
+                        }
+                        Decision::Deny => {
+                            println!("  {}", "\u{2717} denied".red());
+                            results.push(Message::tool_result(
+                                name.clone(),
+                                format!("Permission denied: user rejected {name} on {path}."),
                             ));
                             continue;
                         }
@@ -1019,6 +1168,78 @@ impl Repl {
                     Err(e) => eprintln!("{}", format!("{e}").red()),
                 }
             }
+            SlashAction::SaveSession => {
+                match crate::session::save(
+                    &self.history,
+                    &self.client.model,
+                    &self.workspace_root,
+                    self.session_id.as_deref(),
+                ) {
+                    Ok(path) => {
+                        let id = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        self.session_id = Some(id.clone());
+                        println!(
+                            "  {} Session saved (id: {})",
+                            "\u{2713}".green(),
+                            id.cyan()
+                        );
+                    }
+                    Err(e) => eprintln!("{}", format!("Error saving session: {e}").red()),
+                }
+            }
+            SlashAction::ListSessions => {
+                match crate::session::list() {
+                    Ok(sessions) if sessions.is_empty() => {
+                        println!("{}", "  No saved sessions.".dimmed());
+                    }
+                    Ok(sessions) => {
+                        println!("  {}", "Saved sessions:".bold());
+                        for s in sessions.iter().take(10) {
+                            let age = format_age(s.updated_at);
+                            println!(
+                                "    {}  {}  {}  {} msgs  {}",
+                                s.id.cyan(),
+                                s.name.bold(),
+                                s.model.dimmed(),
+                                s.message_count,
+                                age.dimmed()
+                            );
+                        }
+                        if sessions.len() > 10 {
+                            println!("    {} more...", sessions.len() - 10);
+                        }
+                        println!("  {}", "Use /resume <id> to restore a session.".dimmed());
+                    }
+                    Err(e) => eprintln!("{}", format!("Error listing sessions: {e}").red()),
+                }
+            }
+            SlashAction::ResumeSession(id) => {
+                match crate::session::load(&id) {
+                    Ok(session) => {
+                        // Rebuild system prompt, then append saved messages
+                        let sys = Self::compose_system_prompt(
+                            &self.workspace_root,
+                            &self.mode,
+                            self.model_supports_tools,
+                        );
+                        self.history = vec![Message::system(sys)];
+                        self.history.extend(session.messages);
+                        self.session_id = Some(id.clone());
+                        println!(
+                            "  {} Resumed session \"{}\" ({} messages, model: {})",
+                            "\u{2713}".green(),
+                            session.name.bold(),
+                            self.history.len() - 1,
+                            session.model.cyan()
+                        );
+                    }
+                    Err(e) => eprintln!("{}", format!("Error loading session: {e}").red()),
+                }
+            }
         }
     }
 
@@ -1040,6 +1261,9 @@ impl Repl {
                  /mode agent        — autonomous tool use (default)\n\
                  /mode plan         — show a numbered plan before executing\n\
                  /verbose           — toggle compact/verbose tool call log (default: compact)\n\
+                 /save              — save current session to disk\n\
+                 /sessions          — list saved sessions\n\
+                 /resume <id>       — resume a saved session\n\
                  /read <path>       — read a file and add it to context (works without tool models)\n\
                  /glob <pat> [dir]  — list matching paths, add to context\n\
                  /tree [path] [n]   — directory tree (default . depth 3), add to context\n\
@@ -1115,8 +1339,36 @@ impl Repl {
                 }
             }
             "/verbose" => Some(SlashAction::ToggleVerboseTools),
+            "/save" => Some(SlashAction::SaveSession),
+            "/sessions" => Some(SlashAction::ListSessions),
+            "/resume" => Some(SlashAction::Print("Usage: /resume <session-id>".into())),
+            s if s.starts_with("/resume ") => {
+                let id = s.trim_start_matches("/resume ").trim().to_string();
+                if id.is_empty() {
+                    Some(SlashAction::Print("Usage: /resume <session-id>".into()))
+                } else {
+                    Some(SlashAction::ResumeSession(id))
+                }
+            }
             _ => None,
         }
+    }
+}
+
+fn format_age(unix_ts: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let delta = now.saturating_sub(unix_ts);
+    if delta < 60 {
+        "just now".into()
+    } else if delta < 3600 {
+        format!("{}m ago", delta / 60)
+    } else if delta < 86400 {
+        format!("{}h ago", delta / 3600)
+    } else {
+        format!("{}d ago", delta / 86400)
     }
 }
 

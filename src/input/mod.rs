@@ -21,6 +21,17 @@ const SLASH_COMMANDS: &[&str] = &[
     "/context refresh",
     "/model",
     "/model list",
+    "/mode",
+    "/mode chat",
+    "/mode agent",
+    "/mode plan",
+    "/save",
+    "/sessions",
+    "/resume",
+    "/verbose",
+    "/read",
+    "/glob",
+    "/tree",
 ];
 
 pub struct InputReader {

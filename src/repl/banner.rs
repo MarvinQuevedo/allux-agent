@@ -142,6 +142,14 @@ pub fn print_welcome(version: &str, model: &str, workspace: &Path, skills: &[Str
 /// Width of the inner content area for UI boxes.
 const BOX_WIDTH: usize = 62;
 
+pub fn box_top_pub() -> String {
+    box_top()
+}
+
+pub fn box_bottom_pub() -> String {
+    box_bottom()
+}
+
 fn box_top() -> String {
     format!("  {}", accent(&format!("╭{}╮", "─".repeat(BOX_WIDTH))))
 }
@@ -206,30 +214,21 @@ pub fn print_permission_bash(command: &str) {
 
     // Wrap long commands
     let cmd_display = if command.len() > 54 {
-        format!("{}…", &command[..53])
+        format!("{}\u{2026}", &command[..53])
     } else {
         command.to_string()
     };
-    println!("{}", box_line(&format!("  {} {}", "$".truecolor(100, 200, 100), cmd_display.bold())));
+    let dollar = "$".truecolor(100, 200, 100);
+    println!("{}", box_line(&format!("  {dollar} {}", cmd_display.bold())));
     println!("{}", box_empty());
     println!("{}", box_separator());
-    println!("{}", box_line(&format!(
-        "{}  Allow this once",
-        "[y]".cyan().bold()
-    )));
-    println!("{}", box_line(&format!(
-        "{}  Allow for this session",
-        "[s]".cyan().bold()
-    )));
-    println!("{}", box_line(&format!(
-        "{}  Allow all {} commands",
-        "[a]".cyan().bold(),
-        command.split_whitespace().next().unwrap_or("this")
-    )));
-    println!("{}", box_line(&format!(
-        "{}  Reject",
-        "[n]".red().bold()
-    )));
+    let family = command.split_whitespace().next().unwrap_or("this");
+    println!("{}", box_line(&format!("{}  Allow this once", "[y]".cyan().bold())));
+    println!("{}", box_line(&format!("{}  Allow for this session", "[s]".cyan().bold())));
+    println!("{}", box_line(&format!("{}  Allow all {family} commands (session)", "[a]".cyan().bold())));
+    println!("{}", box_line(&format!("{}  Allow {family} in this workspace (saved)", "[w]".truecolor(217, 119, 38).bold())));
+    println!("{}", box_line(&format!("{}  Allow {family} globally (saved)", "[g]".truecolor(217, 119, 38).bold())));
+    println!("{}", box_line(&format!("{}  Reject", "[n]".red().bold())));
     println!("{}", box_bottom());
 }
 

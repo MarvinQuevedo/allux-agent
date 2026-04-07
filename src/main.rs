@@ -7,6 +7,7 @@ mod input;
 mod ollama;
 mod permissions;
 mod repl;
+mod session;
 mod setup;
 mod tools;
 mod workspace;
