@@ -45,6 +45,22 @@ const SLASH_COMMANDS: &[SlashCmd] = &[
     SlashCmd { cmd: "/compress always",  desc: "Set compression to always" },
     SlashCmd { cmd: "/compress auto",    desc: "Set compression to auto" },
     SlashCmd { cmd: "/compress manual",  desc: "Set compression to manual" },
+    // ── Actions (expert prompts) ──
+    SlashCmd { cmd: "/commit",           desc: "Auto-commit with smart message" },
+    SlashCmd { cmd: "/review",           desc: "Code review of recent changes" },
+    SlashCmd { cmd: "/fix",              desc: "Find and fix build errors" },
+    SlashCmd { cmd: "/test",             desc: "Run tests and fix failures" },
+    SlashCmd { cmd: "/refactor",         desc: "Refactor a file" },
+    SlashCmd { cmd: "/explain",          desc: "Explain a file in detail" },
+    SlashCmd { cmd: "/find",             desc: "Find code by description" },
+    SlashCmd { cmd: "/todo",             desc: "List all TODOs/FIXMEs" },
+    SlashCmd { cmd: "/deps",             desc: "Analyze project dependencies" },
+    SlashCmd { cmd: "/doc",              desc: "Generate documentation for a file" },
+    SlashCmd { cmd: "/scaffold",         desc: "Scaffold a new component" },
+    SlashCmd { cmd: "/changelog",        desc: "Generate changelog from git" },
+    SlashCmd { cmd: "/doctor",           desc: "Diagnose project health" },
+    SlashCmd { cmd: "/perf",             desc: "Analyze performance of a file" },
+    SlashCmd { cmd: "/security",         desc: "Security audit of the project" },
 ];
 
 /// Max menu items to show in the autocomplete dropdown.
