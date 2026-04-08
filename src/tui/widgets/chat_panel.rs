@@ -94,10 +94,12 @@ impl<'a> ChatPanel<'a> {
                     }
                 }
                 ChatMessage::ToolResult(name, preview) => {
-                    let short = if preview.len() > 120 {
-                        format!("{}...", &preview[..120])
+                    // Ensure single-line: newlines in a Span cause phantom lines.
+                    let sanitized = preview.replace('\n', " ");
+                    let short = if sanitized.len() > 120 {
+                        format!("{}…", &sanitized[..120])
                     } else {
-                        preview.clone()
+                        sanitized
                     };
                     lines.push(Line::from(vec![
                         Span::styled(

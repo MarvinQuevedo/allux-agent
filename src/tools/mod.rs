@@ -12,6 +12,10 @@ use serde_json::json;
 use crate::ollama::types::ToolDefinition;
 
 pub use bash::run_bash;
+/// Run bash in quiet mode (no terminal output). Used by the TUI.
+pub async fn dispatch_bash_quiet(command: &str) -> Result<String> {
+    run_bash(command, true).await
+}
 pub use edit_file::run_edit_file;
 pub use glob_tool::run_glob;
 pub use grep_tool::run_grep;
@@ -20,7 +24,8 @@ pub use tree::run_tree;
 pub use write_file::run_write_file;
 
 /// Dispatch a tool call by name with its JSON arguments.
-pub async fn dispatch(name: &str, args: &serde_json::Value) -> Result<String> {
+/// When `quiet` is true, tools suppress terminal output (for TUI mode).
+pub async fn dispatch(name: &str, args: &serde_json::Value, quiet: bool) -> Result<String> {
     let result = match name {
         "read_file" => {
             let path = require_str(args, "path")?;
@@ -55,7 +60,7 @@ pub async fn dispatch(name: &str, args: &serde_json::Value) -> Result<String> {
         }
         "bash" => {
             let command = require_str(args, "command")?;
-            run_bash(command).await
+            run_bash(command, quiet).await
         }
         unknown => Err(anyhow::anyhow!("Unknown tool: {unknown}")),
     }?;
@@ -174,13 +179,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_dispatch_unknown_tool() {
-        let result = dispatch("nonexistent_tool", &json!({})).await;
+        let result = dispatch("nonexistent_tool", &json!({}), true).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_dispatch_read_missing_arg() {
-        let result = dispatch("read_file", &json!({})).await;
+        let result = dispatch("read_file", &json!({}), true).await;
         assert!(result.is_err());
     }
 }

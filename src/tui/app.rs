@@ -425,7 +425,7 @@ impl App {
                 let args = &call.function.arguments;
 
                 // Execute tool (permissions are checked in the TUI layer for bash/edit)
-                let output = match tools::dispatch(name, args).await {
+                let output = match tools::dispatch(name, args, true).await {
                     Ok(out) => out,
                     Err(e) => format!("Error executing {name}: {e}"),
                 };
@@ -443,11 +443,16 @@ impl App {
         self.history
             .push(Message::tool_result(name.clone(), output.clone()));
 
-        // Show compact result in chat
-        let preview = if output.len() > 200 {
-            format!("{}...", &output[..200])
+        // Show compact result in chat (single line, no embedded newlines)
+        let first_line = output
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim();
+        let preview = if first_line.len() > 120 {
+            format!("{}…", &first_line[..120])
         } else {
-            output
+            first_line.to_string()
         };
         self.chat_messages
             .push(ChatMessage::ToolResult(name, preview));
@@ -881,10 +886,15 @@ impl App {
                                     }
                                     "tool" => {
                                         let name = msg.tool_name.as_deref().unwrap_or("tool");
-                                        let preview = if msg.content.len() > 100 {
-                                            format!("{}...", &msg.content[..100])
+                                        let first_line = msg.content
+                                            .lines()
+                                            .find(|l| !l.trim().is_empty())
+                                            .unwrap_or("")
+                                            .trim();
+                                        let preview = if first_line.len() > 120 {
+                                            format!("{}…", &first_line[..120])
                                         } else {
-                                            msg.content.clone()
+                                            first_line.to_string()
                                         };
                                         self.chat_messages.push(ChatMessage::ToolResult(
                                             name.to_string(),

@@ -971,7 +971,7 @@ impl Repl {
             Ok(Some(s))
                 if s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes") =>
             {
-                match tools::run_bash(cmd).await {
+                match tools::run_bash(cmd, false).await {
                     Ok(out) => {
                         print!("{out}");
                         if !out.ends_with('\n') {
@@ -1233,7 +1233,7 @@ impl Repl {
                 }
             }
 
-            let raw_output = match tools::dispatch(name, args).await {
+            let raw_output = match tools::dispatch(name, args, false).await {
                 Ok(out) => {
                     if !is_bash && self.verbose_tools {
                         println!("{}", "✓".green());

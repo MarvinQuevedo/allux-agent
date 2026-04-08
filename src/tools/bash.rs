@@ -7,19 +7,29 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 const MAX_OUTPUT_BYTES: usize = 20_000;
 const TIMEOUT_SECS: u64 = 60;
 
-pub async fn run_bash(command: &str) -> Result<String> {
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+/// Run a bash command. When `quiet` is true (TUI mode), suppress all
+/// terminal output (spinners, status lines) to avoid corrupting the
+/// ratatui buffer.
+pub async fn run_bash(command: &str, quiet: bool) -> Result<String> {
+    let spinner = if quiet {
+        ProgressBar::hidden()
+    } else {
+        let s = ProgressBar::new_spinner();
+        s.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+                .template("{spinner:.cyan} {msg}")
+                .unwrap(),
+        );
+        s.enable_steady_tick(std::time::Duration::from_millis(80));
+        s
+    };
 
     let cmd_disp = if command.len() > 50 { format!("{}…", &command[..49]) } else { command.to_string() };
     let initial_msg = format!("{} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).bold());
-    spinner.set_message(initial_msg.clone());
+    if !quiet {
+        spinner.set_message(initial_msg.clone());
+    }
 
     let mut child = tokio::process::Command::new(shell())
         .args(shell_args(command))
@@ -68,7 +78,9 @@ pub async fn run_bash(command: &str) -> Result<String> {
                     } else {
                         line.clone()
                     };
-                    spinner.set_message(format!("{}\n    {} {}", initial_msg, "│".truecolor(60, 60, 70), display_line.truecolor(120, 120, 130)));
+                    if !quiet {
+                        spinner.set_message(format!("{}\n    {} {}", initial_msg, "│".truecolor(60, 60, 70), display_line.truecolor(120, 120, 130)));
+                    }
                     
                     if is_err {
                         all_stderr.push_str(&line);
@@ -97,12 +109,14 @@ pub async fn run_bash(command: &str) -> Result<String> {
         exit_status?.unwrap().code().unwrap_or(-1)
     };
 
-    if timed_out {
-        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "⌛ timeout".yellow());
-    } else if exit_code == 0 {
-        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "✓".green());
-    } else {
-        println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), format!("✗ exit {}", exit_code).red());
+    if !quiet {
+        if timed_out {
+            println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "⌛ timeout".yellow());
+        } else if exit_code == 0 {
+            println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), "✓".green());
+        } else {
+            println!("    {} {} {}", "▸".truecolor(100, 180, 255), format!("$ {}", cmd_disp).truecolor(140, 140, 160), format!("✗ exit {}", exit_code).red());
+        }
     }
 
     let mut result = String::new();
@@ -171,13 +185,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_echo() {
-        let result = run_bash("echo hello").await.unwrap();
+        let result = run_bash("echo hello", true).await.unwrap();
         assert!(result.trim().contains("hello"));
     }
 
     #[tokio::test]
     async fn test_bash_exit_code_on_failure() {
-        let result = run_bash("exit 1").await.unwrap();
+        let result = run_bash("exit 1", true).await.unwrap();
         assert!(result.contains("exit code: 1"));
     }
 
@@ -185,7 +199,7 @@ mod tests {
     async fn test_bash_captures_stderr() {
         #[cfg(not(target_os = "windows"))]
         {
-            let result = run_bash("echo error >&2").await.unwrap();
+            let result = run_bash("echo error >&2", true).await.unwrap();
             assert!(result.contains("error") || result.contains("stderr"));
         }
     }
