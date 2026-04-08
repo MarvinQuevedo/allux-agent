@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::time::Duration;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -62,24 +63,29 @@ impl InputReader {
     /// Ctrl+C clear, Ctrl+D on empty exits with `Ok(None)`.
     ///
     /// `footer_hint`: optional dimmed line printed **above** the prompt (shortcuts).
-    /// It is *not* redrawn while typing — only the `prompt + input` line uses raw-mode redraw.
-    /// (Putting the hint on the line below `>` breaks on Windows / VS Code when using absolute cursor moves.)
+    /// `live_footer`: optional closure that returns a dynamic footer string (e.g. with
+    /// live system metrics). When provided, this footer is refreshed every ~2 seconds
+    /// even while the user is idle.
     pub fn read_line(
         &mut self,
         prompt: &str,
         prompt_visible_len: usize,
         footer_hint: Option<&str>,
+        live_footer: Option<&dyn Fn() -> String>,
     ) -> Result<Option<String>> {
         let mut stdout = io::stdout();
 
-        if let Some(h) = footer_hint {
+        // Print the initial footer line (live or static).
+        if let Some(f) = live_footer {
+            println!("{}", f());
+        } else if let Some(h) = footer_hint {
             println!("{}", h.dimmed());
         }
         print!("{} ", prompt);
         stdout.flush()?;
 
         terminal::enable_raw_mode()?;
-        let result = self.inner_read(&mut stdout, prompt, prompt_visible_len);
+        let result = self.inner_read(&mut stdout, prompt, prompt_visible_len, live_footer);
         terminal::disable_raw_mode()?;
 
         println!();
@@ -99,6 +105,7 @@ impl InputReader {
         stdout: &mut io::Stdout,
         prompt: &str,
         prompt_visible_len: usize,
+        live_footer: Option<&dyn Fn() -> String>,
     ) -> Result<Option<String>> {
         let mut buf: Vec<char> = Vec::new();
         let mut cur: usize = 0;
@@ -108,6 +115,21 @@ impl InputReader {
         let mut menu_lines: usize = 0;
 
         loop {
+            // Poll with timeout: allows periodic refresh of the live footer.
+            let poll_timeout = if live_footer.is_some() {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_secs(60) // effectively blocking
+            };
+
+            if !event::poll(poll_timeout)? {
+                // Timeout — refresh the footer line (1 line above the prompt).
+                if let Some(f) = &live_footer {
+                    refresh_footer_line(stdout, prompt, prompt_visible_len, &buf, cur, menu_lines, &f())?;
+                }
+                continue;
+            }
+
             let Event::Key(KeyEvent { code, modifiers, kind, .. }) = event::read()? else {
                 continue;
             };
@@ -344,6 +366,33 @@ fn redraw_with_menu(
     } else {
         Ok(0)
     }
+}
+
+/// Redraw the footer line (1 line above the prompt) with updated content,
+/// then restore cursor to the prompt line at the correct column.
+fn refresh_footer_line(
+    stdout: &mut io::Stdout,
+    _prompt: &str,
+    prompt_visible_len: usize,
+    _buf: &[char],
+    cursor_pos: usize,
+    menu_lines: usize,
+    footer_text: &str,
+) -> Result<()> {
+    let col = (prompt_visible_len + 1 + cursor_pos) as u16;
+    // Move up past any menu lines + 1 (the prompt line) to reach the footer line.
+    let up = 1 + menu_lines as u16;
+    execute!(
+        stdout,
+        cursor::MoveUp(up),
+        cursor::MoveToColumn(0),
+        terminal::Clear(ClearType::CurrentLine),
+        Print(footer_text),
+        cursor::MoveDown(up),
+        cursor::MoveToColumn(col),
+    )?;
+    stdout.flush()?;
+    Ok(())
 }
 
 /// Redraw the **current** line only, with optional ghost completion text.

@@ -2,11 +2,25 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use reqwest::Client;
 
+use tokio::sync::mpsc;
+
 use super::types::{
     ChatOptions, ChatRequest, LlmResponse, Message, ModelInfo, ResponseStats, TagsResponse,
     ToolCallItem, ToolDefinition,
 };
 
+/// Events emitted during streaming chat.
+#[derive(Debug)]
+pub enum StreamEvent {
+    /// A text delta from the LLM.
+    TextDelta(String),
+    /// The LLM finished responding.
+    Done(LlmResponse),
+    /// An error occurred.
+    Error(String),
+}
+
+#[derive(Clone)]
 pub struct OllamaClient {
     http: Client,
     base_url: String,
@@ -120,6 +134,109 @@ impl OllamaClient {
         } else {
             Ok(LlmResponse::Text { content: text_buf, stats })
         }
+    }
+
+    /// Send a chat request and stream the response through a channel.
+    /// Each text delta is sent as `StreamEvent::TextDelta`, and the final result
+    /// as `StreamEvent::Done`. This is non-blocking for use with TUI event loops.
+    pub async fn chat_streaming(
+        &self,
+        messages: &[Message],
+        tools: Option<&[ToolDefinition]>,
+        options: Option<ChatOptions>,
+        tx: mpsc::UnboundedSender<StreamEvent>,
+    ) {
+        let request = ChatRequest {
+            model: &self.model,
+            messages,
+            stream: true,
+            tools,
+            options,
+        };
+
+        let response = match self
+            .http
+            .post(format!("{}/api/chat", self.base_url))
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(StreamEvent::Error(format!(
+                    "Failed to connect to Ollama: {e}"
+                )));
+                return;
+            }
+        };
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let _ = tx.send(StreamEvent::Error(format!(
+                "Ollama returned {status}: {body}"
+            )));
+            return;
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut text_buf = String::new();
+        let mut tool_calls: Vec<ToolCallItem> = Vec::new();
+        let mut stats = ResponseStats::default();
+        let mut raw_buf: Vec<u8> = Vec::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(StreamEvent::Error(format!("Stream error: {e}")));
+                    return;
+                }
+            };
+            raw_buf.extend_from_slice(&chunk);
+
+            while let Some(pos) = raw_buf.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = raw_buf.drain(..=pos).collect();
+                let line = String::from_utf8_lossy(&line);
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+
+                match serde_json::from_str::<super::types::ChatChunk>(line) {
+                    Ok(parsed) => {
+                        tool_calls.extend(parsed.message.tool_calls);
+
+                        if !parsed.message.content.is_empty() {
+                            let _ = tx.send(StreamEvent::TextDelta(
+                                parsed.message.content.clone(),
+                            ));
+                            text_buf.push_str(&parsed.message.content);
+                        }
+
+                        if parsed.done {
+                            stats.prompt_tokens = parsed.prompt_eval_count;
+                            stats.completion_tokens = parsed.eval_count;
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+
+        let result = if !tool_calls.is_empty() {
+            LlmResponse::ToolCalls {
+                calls: tool_calls,
+                text: text_buf,
+                stats,
+            }
+        } else {
+            LlmResponse::Text {
+                content: text_buf,
+                stats,
+            }
+        };
+        let _ = tx.send(StreamEvent::Done(result));
     }
 
     /// Unload the current model from Ollama memory (VRAM/RAM) by setting `keep_alive` to 0.

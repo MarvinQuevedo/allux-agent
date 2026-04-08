@@ -39,6 +39,10 @@ tempfile = "3"
 toml = "0.8"
 # Terminal input (arrow keys, raw mode) — also used later for TUI
 crossterm = "0.28"
+# TUI framework (uses crossterm backend)
+ratatui = "0.29"
+# Multi-line text input widget for ratatui
+tui-textarea = "0.7"
 pulldown-cmark = "0.12"
 indicatif = "0.17"
 tokio-util = { version = "0.7", features = ["codec"] }

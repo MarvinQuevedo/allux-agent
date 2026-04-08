@@ -4,21 +4,23 @@
 
 mod compression;
 mod config;
+#[allow(dead_code)]
 mod input;
 mod monitor;
 mod ollama;
 mod permissions;
+#[allow(dead_code)]
 mod repl;
 mod session;
 mod setup;
 mod tools;
+mod tui;
 mod workspace;
 
 use std::env;
 
 use anyhow::Result;
 use config::Config;
-use repl::Repl;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -38,6 +40,7 @@ async fn main() -> Result<()> {
     let workspace_root = env::current_dir()?;
     let metrics = monitor::new_shared();
     monitor::spawn_collector(metrics.clone());
-    let mut repl = Repl::new(config, workspace_root, metrics);
-    repl.run().await
+
+    // Launch the TUI
+    tui::run(config, workspace_root, metrics).await
 }

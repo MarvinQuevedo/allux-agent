@@ -607,7 +607,30 @@ impl Repl {
         loop {
             println!("{}", self.context_divider());
             let prompt = banner::accent("❯").bold().to_string();
-            let input = match self.input.read_line(&prompt, 1, Some(banner::INPUT_FOOTER)) {
+            let metrics = self.metrics.clone();
+            let live_footer = move || {
+                let footer_base = banner::INPUT_FOOTER;
+                if let Ok(m) = metrics.try_read() {
+                    let cpu = m.cpu_usage;
+                    let (cr, cg, cb) = if cpu < 60.0 {
+                        (100, 200, 100)
+                    } else if cpu < 85.0 {
+                        (220, 180, 60)
+                    } else {
+                        (220, 70, 70)
+                    };
+                    format!(
+                        "{}  {} {} {}",
+                        footer_base.dimmed(),
+                        format!("CPU:{cpu:.0}%").truecolor(cr, cg, cb),
+                        "·".truecolor(50, 60, 80),
+                        format!("RAM:{}", m.ram_display()).truecolor(140, 180, 200),
+                    )
+                } else {
+                    footer_base.dimmed().to_string()
+                }
+            };
+            let input = match self.input.read_line(&prompt, 1, None, Some(&live_footer)) {
                 Ok(Some(s)) if !s.is_empty() => s,
                 Ok(Some(_)) => continue,
                 Ok(None) => break, // Ctrl+D
@@ -883,7 +906,7 @@ impl Repl {
             loop {
                 const PLAN_PROMPT: &str = "Plan: [y]es / [n]o / [s]ave / <feedback>: ";
                 let vis = PLAN_PROMPT.chars().count();
-                let input = match self.input.read_line(PLAN_PROMPT, vis, None) {
+                let input = match self.input.read_line(PLAN_PROMPT, vis, None, None) {
                     Ok(Some(s)) => s.trim().to_string(),
                     _ => {
                         self.history.pop(); // remove assistant plan
@@ -942,7 +965,7 @@ impl Repl {
         println!("{}", format!("⚙ suggested command:\n{}", cmd).cyan());
         const RUN_PROMPT: &str = "Run? [y/N]";
         let vis = RUN_PROMPT.chars().count();
-        match self.input.read_line(RUN_PROMPT, vis, None) {
+        match self.input.read_line(RUN_PROMPT, vis, None, None) {
             Ok(Some(s))
                 if s.eq_ignore_ascii_case("y") || s.eq_ignore_ascii_case("yes") =>
             {
@@ -989,7 +1012,7 @@ impl Repl {
             );
             const CONFIRM_PROMPT: &str = "  Confirm [Y/n]: ";
             let vis = CONFIRM_PROMPT.chars().count();
-            match self.input.read_line(CONFIRM_PROMPT, vis, None) {
+            match self.input.read_line(CONFIRM_PROMPT, vis, None, None) {
                 Ok(Some(s)) => {
                     let t = s.trim().to_lowercase();
                     if t == "n" || t == "no" {
@@ -1016,7 +1039,7 @@ impl Repl {
         const SAVE_PROMPT: &str = "  Filename (Enter to skip): ";
         let vis = SAVE_PROMPT.chars().count();
 
-        let filename = match self.input.read_line(SAVE_PROMPT, vis, None) {
+        let filename = match self.input.read_line(SAVE_PROMPT, vis, None, None) {
             Ok(Some(s)) if !s.trim().is_empty() => s.trim().to_string(),
             _ => return,
         };
@@ -1050,7 +1073,7 @@ impl Repl {
                     const PERM_PROMPT: &str = "  \u{276F} ";
                     let vis = 4;
 
-                    let (decision, raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
+                    let (decision, raw) = match self.input.read_line(PERM_PROMPT, vis, None, None) {
                         Ok(Some(s)) => (PermissionStore::parse_input(&s), s),
                         Ok(None) | Err(_) => {
                             use crate::permissions::Decision;
@@ -1113,7 +1136,7 @@ impl Repl {
 
                     const PERM_PROMPT: &str = "  \u{276F} ";
                     let vis = 4;
-                    let (decision, _raw) = match self.input.read_line(PERM_PROMPT, vis, None) {
+                    let (decision, _raw) = match self.input.read_line(PERM_PROMPT, vis, None, None) {
                         Ok(Some(s)) => {
                             // For file ops: y=allow, n=deny (simpler than bash)
                             let d = match s.trim().to_lowercase().as_str() {

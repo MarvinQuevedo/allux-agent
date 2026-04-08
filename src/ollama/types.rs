@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A message in the conversation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub content: String,
@@ -62,12 +62,12 @@ impl Message {
 
 // ── Tool call types (in LLM response) ────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ToolCallItem {
     pub function: ToolCallFunction,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct ToolCallFunction {
     pub name: String,
     pub arguments: serde_json::Value,
@@ -140,6 +140,7 @@ pub struct ChunkMessage {
 }
 
 /// Result of a completed LLM turn.
+#[derive(Debug)]
 pub enum LlmResponse {
     /// The model returned text.
     Text { content: String, stats: ResponseStats },
