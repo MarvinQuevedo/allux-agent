@@ -245,18 +245,17 @@ pub async fn run(config: Config, workspace_root: PathBuf, metrics: SharedMetrics
             }
 
             AppEvent::Mouse(mouse) => {
+                let in_chat = mouse.row >= app.chat_area.y
+                    && mouse.row < app.chat_area.y + app.chat_area.height;
+
                 match mouse.kind {
                     MouseEventKind::ScrollUp => app.scroll_up(3),
                     MouseEventKind::ScrollDown => app.scroll_down(3),
                     MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
-                        // Clear previous selection and start new one
                         app.clear_selection();
-                        if mouse.row >= app.chat_area.y
-                            && mouse.row < app.chat_area.y + app.chat_area.height
-                        {
+                        if in_chat {
                             let is_double = app.start_selection(mouse.row, mouse.column);
                             if is_double {
-                                // Double-click: select word (highlight only, no copy)
                                 let is_streaming = matches!(
                                     app.phase,
                                     AgentPhase::WaitingForLlm | AgentPhase::ExecutingTools
@@ -272,14 +271,28 @@ pub async fn run(config: Config, workspace_root: PathBuf, metrics: SharedMetrics
                                 let plain = chat.build_plain_lines(app.chat_area.width);
                                 app.select_word_at(mouse.row, mouse.column, &plain);
                             }
+                        } else {
+                            // Click outside chat (e.g. input area) — pass to textarea
+                            textarea.input(crossterm::event::Event::Mouse(
+                                crossterm::event::MouseEvent {
+                                    kind: mouse.kind,
+                                    column: mouse.column,
+                                    row: mouse.row,
+                                    modifiers: mouse.modifiers,
+                                },
+                            ));
                         }
                     }
                     MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
-                        app.extend_selection(mouse.row, mouse.column);
+                        if app.selecting {
+                            app.extend_selection(mouse.row, mouse.column);
+                        }
                     }
                     MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
-                        app.finish_selection();
-                        // Only copy if there's a real selection (not just a click)
+                        if app.selecting {
+                            app.finish_selection();
+                        }
+                        // Copy if there's a real selection
                         if app.selection_range().is_some() {
                             let is_streaming = matches!(
                                 app.phase,

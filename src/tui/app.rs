@@ -116,6 +116,8 @@ pub struct App {
     pub spinner_frame: usize,
     pub should_quit: bool,
     pub status_message: Option<String>,
+    /// Tick counter for auto-clearing transient status messages.
+    pub status_msg_ticks: u8,
     /// Ctrl+C was pressed once; waiting for second press or timeout to clear.
     pub ctrl_c_pending: bool,
     pub ctrl_c_tick_count: u8,
@@ -181,6 +183,7 @@ impl App {
             spinner_frame: 0,
             should_quit: false,
             status_message: None,
+            status_msg_ticks: 0,
             ctrl_c_pending: false,
             ctrl_c_tick_count: 0,
             permission_prompt: None,
@@ -1004,6 +1007,22 @@ impl App {
                 self.ctrl_c_tick_count = 0;
                 self.status_message = None;
             }
+        }
+
+        // Auto-clear transient status messages (e.g. "Copied!") after ~1.5s
+        if let Some(ref msg) = self.status_message {
+            if !self.ctrl_c_pending && (msg == "Copied!" || msg == "Word copied!") {
+                self.status_msg_ticks += 1;
+                if self.status_msg_ticks >= 8 {
+                    self.status_message = None;
+                    self.status_msg_ticks = 0;
+                }
+            }
+        }
+
+        // Safety: if selecting got stuck, clear it
+        if self.selecting && self.selection_start == self.selection_end {
+            self.selecting = false;
         }
     }
 
