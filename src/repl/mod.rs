@@ -210,6 +210,8 @@ enum SlashAction {
     CompressAi,
     /// Unload the current model from Ollama VRAM/RAM.
     UnloadModel,
+    /// An action: expanded expert prompt to send to the LLM.
+    RunAction { display: String, prompt: String },
 }
 
 /// `/tree`, `/tree src`, `/tree src 4`
@@ -1597,6 +1599,14 @@ impl Repl {
                     Err(e) => eprintln!("{}", format!("  Could not unload model: {e}").red()),
                 }
             }
+            SlashAction::RunAction { display, prompt } => {
+                println!("{}", format!("▶ {display}").dimmed());
+                let wrapped = self.wrap_user_input_with_auto_scan(&prompt);
+                self.history.push(Message::user(wrapped));
+                let mut stdout = std::io::stdout();
+                self.run_agentic_loop(&mut stdout).await;
+                println!();
+            }
         }
     }
 
@@ -1630,7 +1640,23 @@ impl Repl {
                  /compress manual   — no auto-compression; use '/compress now' to trigger\n\
                  /compress now      — manually compress history right now\n\
                  /compress ai       — use the LLM to semantically summarize old messages\n\
-                 /unload            — unload model from VRAM/RAM\n\
+                 /unload            — unload model from VRAM/RAM\n\n\
+                 Actions (expert prompts sent to LLM):\n\
+                 /commit            — auto-commit with smart message\n\
+                 /review            — code review of recent changes\n\
+                 /fix               — find and fix build errors\n\
+                 /test              — run tests and fix failures\n\
+                 /refactor <file>   — refactor a file\n\
+                 /explain <file>    — explain a file in detail\n\
+                 /find <desc>       — find code by description\n\
+                 /todo              — list all TODOs/FIXMEs\n\
+                 /deps              — analyze project dependencies\n\
+                 /doc <file>        — generate documentation\n\
+                 /scaffold <t> <n>  — scaffold a new component\n\
+                 /changelog         — generate changelog from git\n\
+                 /doctor            — diagnose project health\n\
+                 /perf <file>       — analyze performance\n\
+                 /security          — security audit\n\n\
                  (Broad \u{201c}read project / status\u{201d} questions auto-attach tree + key files when tools are off.)\n\
                  Chat / no tools: ```bash blocks — run offers; ```lang path/file.md — save uses path (confirm Y/n).\n\
                  Ctrl+C             — clear the current input line"
@@ -1729,7 +1755,12 @@ impl Repl {
                 }
             }
             "/unload" => Some(SlashAction::UnloadModel),
-            _ => None,
+            _ => {
+                // Try action expansion (expert prompts like /commit, /fix, etc.)
+                crate::actions::try_expand(input).map(|(display, prompt)| {
+                    SlashAction::RunAction { display, prompt }
+                })
+            }
         }
     }
 }

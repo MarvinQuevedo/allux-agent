@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
 use super::markdown;
@@ -175,6 +175,10 @@ impl<'a> Widget for ChatPanel<'a> {
 
         let inner = block.inner(area);
         block.render(area, buf);
+
+        // Explicitly clear the entire inner area so that stale overlay content
+        // (e.g. autocomplete popup) doesn't persist as ghost artifacts.
+        Clear.render(inner, buf);
 
         let all_lines = self.build_lines(area.width);
         let visible_height = inner.height as usize;

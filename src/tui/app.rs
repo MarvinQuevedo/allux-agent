@@ -555,6 +555,22 @@ impl App {
                      /compress now      — manually compress history\n\
                      /compress ai       — LLM-powered semantic summary\n\
                      /unload            — unload model from VRAM/RAM\n\n\
+                     Actions (expert prompts sent to LLM):\n\
+                     /commit            — auto-commit with smart message\n\
+                     /review            — code review of recent changes\n\
+                     /fix               — find and fix build errors\n\
+                     /test              — run tests and fix failures\n\
+                     /refactor <file>   — refactor a file\n\
+                     /explain <file>    — explain a file in detail\n\
+                     /find <desc>       — find code by description\n\
+                     /todo              — list all TODOs/FIXMEs\n\
+                     /deps              — analyze project dependencies\n\
+                     /doc <file>        — generate documentation\n\
+                     /scaffold <t> <n>  — scaffold a new component\n\
+                     /changelog         — generate changelog from git\n\
+                     /doctor            — diagnose project health\n\
+                     /perf <file>       — analyze performance\n\
+                     /security          — security audit\n\n\
                      Scroll: PageUp/PageDown, mouse wheel\n\
                      Copy:   Esc to toggle copy mode\n\
                      Submit: Enter | Ctrl+D exit"
@@ -982,9 +998,17 @@ impl App {
                     .push(ChatMessage::System("Unloading model...".into()));
             }
             _ => {
-                self.chat_messages.push(ChatMessage::System(format!(
-                    "Unknown command: {cmd}. Type /help for available commands."
-                )));
+                // Try action expansion (expert prompts)
+                if let Some((display, prompt)) = crate::actions::try_expand(trimmed) {
+                    self.chat_messages
+                        .push(ChatMessage::User(display));
+                    self.history.push(Message::user(&prompt));
+                    self.start_llm_call();
+                } else {
+                    self.chat_messages.push(ChatMessage::System(format!(
+                        "Unknown command: {cmd}. Type /help for available commands."
+                    )));
+                }
             }
         }
 

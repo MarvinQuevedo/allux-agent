@@ -2,6 +2,7 @@
 //!
 //! This binary provides the command-line interface for the Allux tool.
 
+mod actions;
 mod compression;
 mod config;
 #[allow(dead_code)]

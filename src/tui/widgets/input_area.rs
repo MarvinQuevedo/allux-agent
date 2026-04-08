@@ -38,6 +38,22 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/compress auto", "Set compression to auto"),
     ("/compress manual", "Set compression to manual"),
     ("/unload", "Unload model from VRAM/RAM"),
+    // ── Actions (expert prompts) ──
+    ("/commit", "Auto-commit with smart message"),
+    ("/review", "Code review of recent changes"),
+    ("/fix", "Find and fix build errors"),
+    ("/test", "Run tests and fix failures"),
+    ("/refactor", "Refactor a file"),
+    ("/explain", "Explain a file in detail"),
+    ("/find", "Find code by description"),
+    ("/todo", "List all TODOs/FIXMEs"),
+    ("/deps", "Analyze project dependencies"),
+    ("/doc", "Generate documentation for a file"),
+    ("/scaffold", "Scaffold a new component"),
+    ("/changelog", "Generate changelog from git"),
+    ("/doctor", "Diagnose project health"),
+    ("/perf", "Analyze performance of a file"),
+    ("/security", "Security audit of the project"),
 ];
 
 /// Max autocomplete items to show.
@@ -115,7 +131,12 @@ impl<'a> Widget for AutocompletePopup<'a> {
         let hidden = self.total_count.saturating_sub(self.completions.len());
         let has_more_line = hidden > 0;
         let rows = self.completions.len() as u16 + if has_more_line { 1 } else { 0 };
-        let popup_height = rows;
+        // Cap popup height to available space above the input area.
+        let max_height = area.y.saturating_sub(1); // leave at least 1 row for header
+        let popup_height = rows.min(max_height);
+        if popup_height == 0 {
+            return;
+        }
         let popup_width = 55u16.min(area.width);
 
         // Position above the input area
