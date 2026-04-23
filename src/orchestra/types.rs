@@ -191,7 +191,7 @@ pub enum Check {
     ManualReview          { note: String },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Language {
     En,
     Es,
@@ -200,7 +200,7 @@ pub enum Language {
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum CheckOutcome {
     Pass,
     Fail { reason: String },
