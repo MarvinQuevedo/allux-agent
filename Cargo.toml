@@ -52,6 +52,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 syn = { version = "2", features = ["full", "parsing"] }
 # Compression for loop-repetition detection (Orchestra validator)
 zstd = "0.13"
+# Low-level OS primitives (PID alive check for store lock)
+libc = "0.2"
 
 [profile.release]
 opt-level = 3

@@ -735,7 +735,8 @@ impl App {
                         ));
                     }
                     "list" => {
-                        match crate::orchestra::list_runs() {
+                        let workspace = std::env::current_dir().unwrap_or_default();
+                        match crate::orchestra::list_runs(&workspace) {
                             Ok(runs) if runs.is_empty() => {
                                 self.chat_messages.push(ChatMessage::System(
                                     "No saved Orchestra runs found.".into(),
@@ -744,9 +745,10 @@ impl App {
                             Ok(runs) => {
                                 let mut lines = vec![format!("Orchestra runs ({} total):", runs.len())];
                                 for r in runs.iter().take(10) {
+                                    let status = format!("{:?}", r.status);
                                     lines.push(format!(
                                         "  {}  [{}]  \"{}\"",
-                                        r.run_id, r.phase, r.goal_preview
+                                        r.run_id, status, r.goal
                                     ));
                                 }
                                 lines.push(String::new());

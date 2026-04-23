@@ -28,6 +28,7 @@ dependencies = [
  "futures",
  "glob",
  "indicatif",
+ "libc",
  "pulldown-cmark",
  "ratatui",
  "regex",
