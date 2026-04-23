@@ -7,6 +7,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::compression::{self, CompressionMode};
 use crate::config::Config;
+use crate::orchestra::types::FailurePolicy;
 use crate::monitor::SharedMetrics;
 use crate::ollama::client::OllamaClient;
 use crate::ollama::types::{ChatOptions, Message, ToolCallItem};
@@ -43,14 +44,16 @@ pub enum SessionMode {
     Chat,
     Agent,
     Plan,
+    Orchestra,
 }
 
 impl SessionMode {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Chat => "chat",
-            Self::Agent => "agent",
-            Self::Plan => "plan",
+            Self::Chat      => "chat",
+            Self::Agent     => "agent",
+            Self::Plan      => "plan",
+            Self::Orchestra => "orchestra",
         }
     }
 }
@@ -105,6 +108,7 @@ pub struct App {
     pub permissions: PermissionStore,
     pub metrics: SharedMetrics,
     pub session_id: Option<String>,
+    pub orchestra_policy: FailurePolicy,
 
     // ── UI state ──
     pub chat_messages: Vec<ChatMessage>,
@@ -159,6 +163,8 @@ impl App {
         let client = OllamaClient::new(&config.ollama_url, &config.model);
         let compression_mode = CompressionMode::from_str_loose(&config.compression_mode)
             .unwrap_or(CompressionMode::Auto);
+        let orchestra_policy = FailurePolicy::from_str_loose(&config.orchestra_policy)
+            .unwrap_or(FailurePolicy::Interactive);
 
         let system_prompt = Self::compose_system_prompt(&workspace_root, &SessionMode::Agent, true);
         let history = vec![Message::system(system_prompt)];
@@ -175,6 +181,7 @@ impl App {
             permissions: PermissionStore::new(&workspace_root),
             metrics,
             session_id: None,
+            orchestra_policy,
 
             chat_messages: Vec::new(),
             scroll_offset: 0,
@@ -213,7 +220,7 @@ impl App {
     ) -> String {
         let intro = match mode {
             SessionMode::Chat => SYSTEM_PROMPT_CHAT_ONLY,
-            SessionMode::Agent | SessionMode::Plan => {
+            SessionMode::Agent | SessionMode::Plan | SessionMode::Orchestra => {
                 if model_supports_tools {
                     SYSTEM_PROMPT
                 } else {
@@ -546,6 +553,9 @@ impl App {
                      /mode chat         — chat only, no tools\n\
                      /mode agent        — autonomous tool use (default)\n\
                      /mode plan         — show a numbered plan before executing\n\
+                     /mode orchestra    — multi-step structured execution\n\
+                     /orchestra         — orchestra commands (list/resume/cancel)\n\
+                     /policy <name>     — set orchestra failure policy (interactive/autonomous)\n\
                      /verbose           — toggle compact/verbose tool call log\n\
                      /save              — save current session to disk\n\
                      /sessions          — list saved sessions\n\
@@ -685,14 +695,15 @@ impl App {
             "/mode" => {
                 if rest.is_empty() {
                     self.chat_messages.push(ChatMessage::System(format!(
-                        "Current mode: {}\n  chat  — no tools, pure conversation\n  agent — autonomous tool use (default)\n  plan  — show numbered plan first",
+                        "Current mode: {}\n  chat       — no tools, pure conversation\n  agent      — autonomous tool use (default)\n  plan       — show numbered plan first\n  orchestra  — multi-step structured execution",
                         self.mode.label()
                     )));
                 } else {
                     let new_mode = match rest {
-                        "chat" => Some(SessionMode::Chat),
-                        "agent" => Some(SessionMode::Agent),
-                        "plan" => Some(SessionMode::Plan),
+                        "chat"      => Some(SessionMode::Chat),
+                        "agent"     => Some(SessionMode::Agent),
+                        "plan"      => Some(SessionMode::Plan),
+                        "orchestra" => Some(SessionMode::Orchestra),
                         _ => None,
                     };
                     if let Some(m) = new_mode {
@@ -704,8 +715,93 @@ impl App {
                         )));
                     } else {
                         self.chat_messages.push(ChatMessage::System(format!(
-                            "Unknown mode: {rest}. Use chat, agent, or plan."
+                            "Unknown mode: {rest}. Use chat, agent, plan, or orchestra."
                         )));
+                    }
+                }
+            }
+            "/orchestra" => {
+                match rest {
+                    "" => {
+                        self.chat_messages.push(ChatMessage::System(
+                            "Orchestra mode — multi-step structured execution.\n\
+                             Usage:\n\
+                             /orchestra <goal>         — start a new run\n\
+                             /orchestra list           — list past runs\n\
+                             /orchestra resume <id>    — resume a paused run\n\
+                             /orchestra cancel         — cancel the current run\n\
+                             Switch mode with /mode orchestra, then type your goal."
+                                .into(),
+                        ));
+                    }
+                    "list" => {
+                        match crate::orchestra::list_runs() {
+                            Ok(runs) if runs.is_empty() => {
+                                self.chat_messages.push(ChatMessage::System(
+                                    "No saved Orchestra runs found.".into(),
+                                ));
+                            }
+                            Ok(runs) => {
+                                let mut lines = vec![format!("Orchestra runs ({} total):", runs.len())];
+                                for r in runs.iter().take(10) {
+                                    lines.push(format!(
+                                        "  {}  [{}]  \"{}\"",
+                                        r.run_id, r.phase, r.goal_preview
+                                    ));
+                                }
+                                lines.push(String::new());
+                                lines.push("Use /orchestra resume <id> to continue.".into());
+                                self.chat_messages.push(ChatMessage::System(lines.join("\n")));
+                            }
+                            Err(e) => {
+                                self.chat_messages.push(ChatMessage::Error(format!("{e}")));
+                            }
+                        }
+                    }
+                    _ if rest.starts_with("resume ") => {
+                        self.chat_messages.push(ChatMessage::System(
+                            "Orchestra resume is not yet implemented.".into(),
+                        ));
+                    }
+                    "cancel" => {
+                        self.chat_messages.push(ChatMessage::System(
+                            "No active Orchestra run to cancel.".into(),
+                        ));
+                    }
+                    _ => {
+                        // Treat the rest as a goal to run
+                        self.chat_messages.push(ChatMessage::System(
+                            "Orchestra execution is not yet implemented. \
+                             Switch to /mode agent for now."
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            "/policy" => {
+                match rest {
+                    "" => {
+                        self.chat_messages.push(ChatMessage::System(format!(
+                            "Orchestra failure policy: {}\n\
+                             /policy interactive — escalate to user on task failure\n\
+                             /policy autonomous  — defer failures and continue",
+                            self.orchestra_policy.label()
+                        )));
+                    }
+                    _ => {
+                        if let Some(policy) = FailurePolicy::from_str_loose(rest) {
+                            self.orchestra_policy = policy;
+                            self.config.orchestra_policy = policy.label().to_string();
+                            let _ = self.config.save();
+                            self.chat_messages.push(ChatMessage::System(format!(
+                                "Orchestra policy set to: {}",
+                                policy.label()
+                            )));
+                        } else {
+                            self.chat_messages.push(ChatMessage::System(format!(
+                                "Unknown policy: {rest}. Use interactive or autonomous."
+                            )));
+                        }
                     }
                 }
             }
