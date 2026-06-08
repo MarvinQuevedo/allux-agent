@@ -12,6 +12,7 @@ use serde_json::json;
 use crate::ollama::types::ToolDefinition;
 
 pub use bash::run_bash;
+pub use bash::{list_background, stop_background};
 /// Run bash in quiet mode (no terminal output). Used by the TUI.
 pub async fn dispatch_bash_quiet(command: &str) -> Result<String> {
     run_bash(command, true).await
@@ -151,7 +152,10 @@ pub fn all_definitions() -> Vec<ToolDefinition> {
         ),
         ToolDefinition::function(
             "bash",
-            "Execute a shell command and return its output. Use for builds, tests, git, etc.",
+            "Execute a shell command and return its output. Use for builds, tests, git, system administration, etc. \
+             Long-running commands (servers like `python -m http.server`, `npm run dev`; watchers; `tail -f`) are \
+             automatically run in the background and return immediately with a PID — do NOT add `&` yourself and do \
+             NOT re-run them.",
             json!({
                 "type": "object",
                 "properties": {

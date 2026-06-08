@@ -84,6 +84,8 @@ pub async fn run_wizard() -> Result<Config> {
         model,
         context_size: 8192,
         compression_mode: "auto".to_string(),
+        think: Some(false),
+        keep_alive: "30m".to_string(),
     };
     config.save()?;
 

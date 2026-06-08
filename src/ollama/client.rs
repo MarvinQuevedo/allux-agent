@@ -5,9 +5,23 @@ use reqwest::Client;
 use tokio::sync::mpsc;
 
 use super::types::{
-    ChatOptions, ChatRequest, LlmResponse, Message, ModelInfo, ResponseStats, TagsResponse,
-    ToolCallItem, ToolDefinition,
+    ChatOptions, ChatRequest, LlmResponse, Message, ModelInfo, ResponseStats, ShowResponse,
+    TagsResponse, ToolCallItem, ToolDefinition,
 };
+
+/// Capabilities of a model, as reported by Ollama's `/api/show`.
+#[derive(Debug, Clone, Default)]
+pub struct ModelCapabilities {
+    /// Model can use native tool calling.
+    pub tools: bool,
+    /// Model supports chain-of-thought (`think` toggle applies).
+    pub thinking: bool,
+    /// Model accepts images. Reserved for future multimodal support.
+    #[allow(dead_code)]
+    pub vision: bool,
+    /// Native maximum context length, if reported.
+    pub context_length: Option<u64>,
+}
 
 /// Events emitted during streaming chat.
 #[derive(Debug)]
@@ -25,6 +39,13 @@ pub struct OllamaClient {
     http: Client,
     base_url: String,
     pub model: String,
+    /// Top-level `think` toggle sent with every request. `None` = model default.
+    /// Set to `Some(false)` to disable reasoning for faster tool loops.
+    pub think: Option<bool>,
+    /// `keep_alive` sent with every request — keeps the model resident in
+    /// VRAM/RAM between turns so large local models don't pay reload latency.
+    /// `None` falls back to Ollama's default (5m).
+    pub keep_alive: Option<String>,
 }
 
 impl OllamaClient {
@@ -33,7 +54,24 @@ impl OllamaClient {
             http: Client::new(),
             base_url: base_url.into(),
             model: model.into(),
+            think: None,
+            // Keep big local models warm across tool rounds by default.
+            keep_alive: Some("30m".to_string()),
         }
+    }
+
+    /// Builder: set the `think` toggle for reasoning-capable models.
+    pub fn with_think(mut self, think: Option<bool>) -> Self {
+        self.think = think;
+        self
+    }
+
+    /// Builder: set how long Ollama keeps the model loaded after a request.
+    /// An empty string leaves Ollama's default (5m) in place.
+    pub fn with_keep_alive(mut self, keep_alive: impl Into<String>) -> Self {
+        let v = keep_alive.into();
+        self.keep_alive = if v.trim().is_empty() { None } else { Some(v) };
+        self
     }
 
     pub fn base_url(&self) -> &str {
@@ -59,6 +97,8 @@ impl OllamaClient {
             stream: true,
             tools,
             options,
+            think: self.think,
+            keep_alive: self.keep_alive.as_deref(),
         };
 
         let response = self
@@ -152,6 +192,8 @@ impl OllamaClient {
             stream: true,
             tools,
             options,
+            think: self.think,
+            keep_alive: self.keep_alive.as_deref(),
         };
 
         let response = match self
@@ -251,6 +293,32 @@ impl OllamaClient {
             .await
             .context("Failed to unload model from Ollama")?;
         Ok(())
+    }
+
+    /// Query a model's capabilities (tools, thinking, vision, native context)
+    /// via `POST /api/show`. Used to configure the session up front instead of
+    /// discovering tool support reactively after a failed request.
+    pub async fn capabilities(base_url: &str, model: &str) -> Result<ModelCapabilities> {
+        let client = Client::new();
+        let resp = client
+            .post(format!("{base_url}/api/show"))
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await
+            .context("Cannot reach Ollama /api/show. Is it running on port 11434?")?;
+        let show: ShowResponse = resp.json().await.context("Failed to parse /api/show")?;
+        let has = |c: &str| show.capabilities.iter().any(|x| x == c);
+        let context_length = show
+            .model_info
+            .iter()
+            .find(|(k, _)| k.ends_with(".context_length"))
+            .and_then(|(_, v)| v.as_u64());
+        Ok(ModelCapabilities {
+            tools: has("tools"),
+            thinking: has("thinking"),
+            vision: has("vision"),
+            context_length,
+        })
     }
 
     /// List all locally available models.

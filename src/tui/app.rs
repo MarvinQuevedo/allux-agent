@@ -21,20 +21,7 @@ use super::widgets::chat_panel::ChatMessage;
 
 const MAX_TOOL_ROUNDS: usize = 10000;
 
-const SYSTEM_PROMPT: &str = "\
-You are Allux, a local code assistant powered by Ollama. \
-You help with software engineering tasks. \
-You have access to tools: read_file, write_file, edit_file, glob, grep, tree, bash. \
-Use them to explore and modify the codebase when needed. \
-Always prefer reading files before editing them. \
-Be concise and precise.";
-
-const SYSTEM_PROMPT_CHAT_ONLY: &str = "\
-You are Allux, a local code assistant. This session is in chat-only mode: \
-Ollama does not expose tool calling for this model, so you cannot invoke tools yourself. \
-The user can load disk context with slash commands. \
-For shell steps, put each command in a fenced block with language bash or sh. \
-Be concise.";
+use crate::prompts::{AGENT_SYSTEM_PROMPT, CHAT_ONLY_SYSTEM_PROMPT, PLAN_SYSTEM_PROMPT};
 
 // ── Session mode ────────────────────────────────────────────────────────────
 
@@ -100,6 +87,12 @@ pub struct App {
     pub workspace_root: PathBuf,
     pub mode: SessionMode,
     pub model_supports_tools: bool,
+    /// Whether the current model supports the `think` toggle (from /api/show).
+    pub thinking_supported: bool,
+    /// User's reasoning preference: Some(false)=off, Some(true)=on, None=model default.
+    pub think_pref: Option<bool>,
+    /// Native max context length reported by the model, if known.
+    pub native_context: Option<u64>,
     pub verbose_tools: bool,
     pub compression_mode: CompressionMode,
     pub permissions: PermissionStore,
@@ -142,8 +135,19 @@ pub struct App {
     // ── Streaming ──
     pub streaming_text: String,
     pub current_tool_round: usize,
+    /// Number of tool results still expected for the current batch. The next LLM
+    /// call only fires once this reaches 0, so a model that returns several tool
+    /// calls at once triggers exactly one follow-up request instead of one per
+    /// result (which would race overlapping requests on `history`).
+    pub pending_tool_results: usize,
     /// Input queued while LLM is busy. Sent automatically when phase goes Idle.
     pub queued_input: Option<String>,
+    /// Handle to the in-flight LLM streaming task. Cancelling aborts it, which
+    /// drops the HTTP stream and makes Ollama stop generating — freeing the local
+    /// model immediately instead of letting it run to completion unseen.
+    pub llm_task: Option<tokio::task::JoinHandle<()>>,
+    /// Handle to the in-flight tool-execution task (aborted on cancel).
+    pub tool_task: Option<tokio::task::JoinHandle<()>>,
 
     // ── Event channel (for sending events from tool execution, etc.) ──
     pub event_tx: mpsc::UnboundedSender<AppEvent>,
@@ -156,12 +160,17 @@ impl App {
         metrics: SharedMetrics,
         event_tx: mpsc::UnboundedSender<AppEvent>,
     ) -> Self {
-        let client = OllamaClient::new(&config.ollama_url, &config.model);
+        let client = OllamaClient::new(&config.ollama_url, &config.model)
+            .with_keep_alive(config.keep_alive.clone());
         let compression_mode = CompressionMode::from_str_loose(&config.compression_mode)
             .unwrap_or(CompressionMode::Auto);
 
         let system_prompt = Self::compose_system_prompt(&workspace_root, &SessionMode::Agent, true);
         let history = vec![Message::system(system_prompt)];
+
+        // `think` is applied only once capability detection confirms the model
+        // supports it (see apply_capabilities), so start with the model default.
+        let think_pref = config.think;
 
         Self {
             client,
@@ -170,6 +179,9 @@ impl App {
             workspace_root: workspace_root.clone(),
             mode: SessionMode::Agent,
             model_supports_tools: true,
+            thinking_supported: false,
+            think_pref,
+            native_context: None,
             verbose_tools: false,
             compression_mode,
             permissions: PermissionStore::new(&workspace_root),
@@ -198,7 +210,10 @@ impl App {
 
             streaming_text: String::new(),
             current_tool_round: 0,
+            pending_tool_results: 0,
             queued_input: None,
+            llm_task: None,
+            tool_task: None,
 
             event_tx,
         }
@@ -212,14 +227,10 @@ impl App {
         model_supports_tools: bool,
     ) -> String {
         let intro = match mode {
-            SessionMode::Chat => SYSTEM_PROMPT_CHAT_ONLY,
-            SessionMode::Agent | SessionMode::Plan => {
-                if model_supports_tools {
-                    SYSTEM_PROMPT
-                } else {
-                    SYSTEM_PROMPT_CHAT_ONLY
-                }
-            }
+            SessionMode::Chat => CHAT_ONLY_SYSTEM_PROMPT,
+            _ if !model_supports_tools => CHAT_ONLY_SYSTEM_PROMPT,
+            SessionMode::Plan => PLAN_SYSTEM_PROMPT,
+            SessionMode::Agent => AGENT_SYSTEM_PROMPT,
         };
         format!("{intro}\n\n{}", workspace::snapshot(root))
     }
@@ -237,6 +248,58 @@ impl App {
             }
         }
         self.history.insert(0, Message::system(content));
+    }
+
+    // ── Capability detection ──────────────────────────────────────────────────
+
+    /// Fire off an async `/api/show` query for the current model. The result
+    /// arrives as `AppEvent::CapabilitiesLoaded` and is applied by
+    /// [`apply_capabilities`]. Safe to call at startup and after `/model`.
+    pub fn spawn_capability_detection(&self) {
+        let base_url = self.client.base_url().to_string();
+        let model = self.client.model.clone();
+        let tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(caps) = OllamaClient::capabilities(&base_url, &model).await {
+                let _ = tx.send(AppEvent::CapabilitiesLoaded {
+                    model,
+                    tools: caps.tools,
+                    thinking: caps.thinking,
+                    context_length: caps.context_length,
+                });
+            }
+        });
+    }
+
+    /// Apply detected capabilities: gate tool use and the `think` toggle, and
+    /// remember the model's native context window. Ignores stale results from a
+    /// model the user has since switched away from.
+    pub fn apply_capabilities(
+        &mut self,
+        model: String,
+        tools: bool,
+        thinking: bool,
+        context_length: Option<u64>,
+    ) {
+        if model != self.client.model {
+            return; // stale — user changed model before this resolved
+        }
+        self.thinking_supported = thinking;
+        self.native_context = context_length;
+
+        // Only send `think` to models that actually support it.
+        self.client.think = if thinking { self.think_pref } else { None };
+
+        if self.model_supports_tools != tools {
+            self.model_supports_tools = tools;
+            self.rebuild_system_prompt();
+        }
+
+        if !tools {
+            self.chat_messages.push(ChatMessage::System(format!(
+                "Model '{model}' has no tool support — running in chat-only mode. Use /read, /glob, /tree or /model <tool-capable>.",
+            )));
+        }
     }
 
     // ── Context tracking ────────────────────────────────────────────────────
@@ -299,12 +362,15 @@ impl App {
         let client = self.client.clone();
         let history = self.history.clone();
         let options = ChatOptions {
-            temperature: None,
+            // Greedy decoding when tools are in play: local models pick the right
+            // tool far more reliably at temperature 0. Chat mode keeps the model
+            // default so prose stays natural.
+            temperature: if use_tools { Some(0.0) } else { None },
             num_ctx: Some(self.config.context_size),
         };
         let event_tx = self.event_tx.clone();
 
-        tokio::spawn(async move {
+        self.llm_task = Some(tokio::spawn(async move {
             let (stream_tx, stream_rx) = mpsc::unbounded_channel();
 
             // Forward stream events to the app event channel
@@ -319,7 +385,7 @@ impl App {
                     .chat_streaming(&history, None, Some(options), stream_tx)
                     .await;
             }
-        });
+        }));
     }
 
     // ── Handle stream events ────────────────────────────────────────────────
@@ -333,6 +399,11 @@ impl App {
     }
 
     pub fn on_stream_done(&mut self, content: String, prompt_tokens: u32, completion_tokens: u32) {
+        // Ignore a result that lands after the user cancelled this turn.
+        if self.phase != AgentPhase::WaitingForLlm {
+            return;
+        }
+        self.llm_task = None;
         self.phase = AgentPhase::Idle;
         self.history.push(Message::assistant(&content));
         self.chat_messages.push(ChatMessage::Assistant(content));
@@ -352,6 +423,11 @@ impl App {
         _prompt_tokens: u32,
         _completion_tokens: u32,
     ) {
+        // Ignore tool calls that arrive after the user cancelled this turn.
+        if self.phase != AgentPhase::WaitingForLlm {
+            return;
+        }
+        self.llm_task = None;
         self.streaming_text.clear();
 
         // Show tool calls in chat
@@ -414,12 +490,21 @@ impl App {
     // ── Tool execution ──────────────────────────────────────────────────────
 
     fn execute_tool_calls(&mut self, calls: Vec<ToolCallItem>) {
+        if calls.is_empty() {
+            // Defensive: nothing to run, resume the loop immediately.
+            self.phase = AgentPhase::Idle;
+            self.flush_queued_input();
+            return;
+        }
+
         self.phase = AgentPhase::ExecutingTools;
         self.current_tool_round += 1;
+        // Expect one result per call; the follow-up LLM call waits for all of them.
+        self.pending_tool_results = calls.len();
 
         let event_tx = self.event_tx.clone();
 
-        tokio::spawn(async move {
+        self.tool_task = Some(tokio::spawn(async move {
             for call in &calls {
                 let name = &call.function.name;
                 let args = &call.function.arguments;
@@ -435,10 +520,18 @@ impl App {
                     output: output.clone(),
                 });
             }
-        });
+        }));
     }
 
     pub fn on_tool_result(&mut self, name: String, output: String) {
+        // Drop stale results: a cancelled (or already-completed) batch sets
+        // `pending_tool_results` to 0, so any late-arriving result is ignored
+        // instead of being appended out of order or spawning a fresh LLM call.
+        if self.pending_tool_results == 0 {
+            return;
+        }
+        self.pending_tool_results -= 1;
+
         // Add tool result to history
         self.history
             .push(Message::tool_result(name.clone(), output.clone()));
@@ -450,19 +543,25 @@ impl App {
             .unwrap_or("")
             .trim();
         let preview = if first_line.len() > 120 {
-            format!("{}…", &first_line[..120])
+            format!("{}…", truncate_str(first_line, 120))
         } else {
             first_line.to_string()
         };
         self.chat_messages
             .push(ChatMessage::ToolResult(name, preview));
 
-        // Check if this was the last tool result for this batch
-        // For simplicity, we'll start a new LLM call after each tool result
-        // In production, we'd batch all results first
-        // Start new LLM round
-        if self.current_tool_round < MAX_TOOL_ROUNDS {
-            self.start_llm_call();
+        // Only continue once every result in this batch has arrived. This makes
+        // the agent issue exactly one follow-up request per tool round even when
+        // the model emits several tool calls at once — critical for local models,
+        // where overlapping requests would race on `history` and waste compute.
+        if self.pending_tool_results == 0 {
+            self.tool_task = None;
+            if self.current_tool_round < MAX_TOOL_ROUNDS {
+                self.start_llm_call();
+            } else {
+                self.phase = AgentPhase::Idle;
+                self.flush_queued_input();
+            }
         }
         self.scroll_to_bottom();
     }
@@ -537,11 +636,14 @@ impl App {
                      /help              — this message\n\
                      /clear             — reset conversation\n\
                      /history           — show conversation history\n\
-                     /context           — print workspace snapshot\n\
+                     /context           — print workspace snapshot + num_ctx\n\
                      /context refresh   — rescan cwd and update system context\n\
+                     /context <n>       — set context window (num_ctx)\n\
                      /model             — show current model\n\
                      /model list        — list available models\n\
                      /model <name>      — switch model\n\
+                     /think [on|off]    — toggle model reasoning (off = faster)\n\
+                     /keepalive <dur>   — how long to keep the model warm (e.g. 30m, 1h)\n\
                      /mode              — show current mode (chat / agent / plan)\n\
                      /mode chat         — chat only, no tools\n\
                      /mode agent        — autonomous tool use (default)\n\
@@ -559,7 +661,9 @@ impl App {
                      /compress manual   — no auto-compression\n\
                      /compress now      — manually compress history\n\
                      /compress ai       — LLM-powered semantic summary\n\
-                     /unload            — unload model from VRAM/RAM\n\n\
+                     /unload            — unload model from VRAM/RAM\n\
+                     /servers           — list background processes (servers)\n\
+                     /stop <pid|all>    — stop a background process\n\n\
                      Actions (expert prompts sent to LLM):\n\
                      /commit            — auto-commit with smart message\n\
                      /review            — code review of recent changes\n\
@@ -612,10 +716,16 @@ impl App {
             }
             "/context" => {
                 if rest.is_empty() || rest == "show" {
+                    let native = self
+                        .native_context
+                        .map(|n| format!("{n}"))
+                        .unwrap_or_else(|| "unknown".into());
                     let snapshot = workspace::snapshot(&self.workspace_root);
                     self.chat_messages.push(ChatMessage::System(format!(
-                        "Workspace: {}\n{}",
+                        "Workspace: {}\nnum_ctx: {} · model native max: {}\n{}",
                         self.workspace_root.display(),
+                        self.config.context_size,
+                        native,
                         snapshot
                     )));
                 } else if rest == "refresh" {
@@ -625,10 +735,65 @@ impl App {
                     self.chat_messages.push(ChatMessage::System(
                         "Workspace context refreshed.".into(),
                     ));
+                } else if let Ok(n) = rest.parse::<u32>() {
+                    let max = self.native_context.unwrap_or(u64::MAX);
+                    if (n as u64) > max {
+                        self.chat_messages.push(ChatMessage::System(format!(
+                            "Requested num_ctx {n} exceeds model native max {max}. Set to {max}."
+                        )));
+                        self.config.context_size = max as u32;
+                    } else {
+                        self.config.context_size = n;
+                        self.chat_messages.push(ChatMessage::System(format!(
+                            "num_ctx set to {n}. (Larger = more memory; takes effect on next message.)"
+                        )));
+                    }
+                    let _ = self.config.save();
                 } else {
                     self.chat_messages.push(ChatMessage::System(
-                        "Usage: /context or /context refresh".into(),
+                        "Usage: /context [show|refresh|<num_ctx>]".into(),
                     ));
+                }
+            }
+            "/think" => {
+                if !self.thinking_supported {
+                    self.chat_messages.push(ChatMessage::System(format!(
+                        "Model '{}' does not support reasoning (`think`).",
+                        self.client.model
+                    )));
+                } else {
+                    // `Some(new_pref)` to apply, `None` to report a usage error.
+                    let new_pref: Option<Option<bool>> = match rest {
+                        "on" | "true" => Some(Some(true)),
+                        "off" | "false" => Some(Some(false)),
+                        "default" | "auto" => Some(None),
+                        // bare /think toggles on ↔ off
+                        "" => Some(match self.think_pref {
+                            Some(true) => Some(false),
+                            _ => Some(true),
+                        }),
+                        _ => None,
+                    };
+                    match new_pref {
+                        Some(pref) => {
+                            self.think_pref = pref;
+                            self.client.think = pref;
+                            self.config.think = pref;
+                            let _ = self.config.save();
+                            let label = match pref {
+                                Some(true) => "on",
+                                Some(false) => "off (faster)",
+                                None => "model default",
+                            };
+                            self.chat_messages
+                                .push(ChatMessage::System(format!("Reasoning: {label}")));
+                        }
+                        None => {
+                            self.chat_messages.push(ChatMessage::System(format!(
+                                "Unknown: /think {rest}. Use on, off, or default."
+                            )));
+                        }
+                    }
                 }
             }
             "/model" => {
@@ -674,12 +839,15 @@ impl App {
                     self.config.model = rest.to_string();
                     self.client.model = rest.to_string();
                     self.model_supports_tools = true;
+                    self.thinking_supported = false;
+                    self.native_context = None;
+                    self.client.think = None; // until capabilities confirm support
                     self.rebuild_system_prompt();
                     let _ = self.config.save();
                     self.chat_messages.push(ChatMessage::System(format!(
-                        "Model set to: {}",
-                        rest
+                        "Model set to: {rest} (detecting capabilities…)"
                     )));
+                    self.spawn_capability_detection();
                 }
             }
             "/mode" => {
@@ -728,7 +896,7 @@ impl App {
                             );
                             self.history.push(Message::user(inject));
                             let preview = if text.len() > 500 {
-                                format!("{}...", &text[..500])
+                                format!("{}...", truncate_str(&text, 500))
                             } else {
                                 text
                             };
@@ -874,7 +1042,7 @@ impl App {
                                     "user" => {
                                         // Show a short preview, not the full injected context
                                         let preview = if msg.content.len() > 200 {
-                                            format!("{}...", &msg.content[..200])
+                                            format!("{}...", truncate_str(&msg.content, 200))
                                         } else {
                                             msg.content.clone()
                                         };
@@ -892,7 +1060,7 @@ impl App {
                                             .unwrap_or("")
                                             .trim();
                                         let preview = if first_line.len() > 120 {
-                                            format!("{}…", &first_line[..120])
+                                            format!("{}…", truncate_str(first_line, 120))
                                         } else {
                                             first_line.to_string()
                                         };
@@ -987,6 +1155,41 @@ impl App {
                     }
                 }
             }
+            "/keepalive" | "/keep-alive" => {
+                if rest.is_empty() {
+                    let cur = self
+                        .client
+                        .keep_alive
+                        .as_deref()
+                        .unwrap_or("Ollama default (5m)");
+                    self.chat_messages.push(ChatMessage::System(format!(
+                        "keep_alive: {cur} — how long Ollama keeps the model loaded between turns.\n\
+                         Keeping it warm avoids the multi-second reload cost of large local models.\n\
+                         Usage: /keepalive <dur>  e.g. 30m · 1h · 0 (unload after each turn) · default"
+                    )));
+                } else {
+                    // `default`/`auto` clears the override (Ollama's own default applies).
+                    // Anything else is sent verbatim as a Go-style duration.
+                    let value = match rest {
+                        "default" | "auto" => String::new(),
+                        other => other.to_string(),
+                    };
+                    self.client.keep_alive = if value.is_empty() {
+                        None
+                    } else {
+                        Some(value.clone())
+                    };
+                    self.config.keep_alive = value.clone();
+                    let _ = self.config.save();
+                    let label = if value.is_empty() {
+                        "Ollama default (5m)".to_string()
+                    } else {
+                        value
+                    };
+                    self.chat_messages
+                        .push(ChatMessage::System(format!("keep_alive: {label}")));
+                }
+            }
             "/unload" => {
                 let client = self.client.clone();
                 let tx = self.event_tx.clone();
@@ -1006,6 +1209,42 @@ impl App {
                 });
                 self.chat_messages
                     .push(ChatMessage::System("Unloading model...".into()));
+            }
+            "/servers" => {
+                let procs = tools::list_background();
+                if procs.is_empty() {
+                    self.chat_messages.push(ChatMessage::System(
+                        "No background processes running.".into(),
+                    ));
+                } else {
+                    let list: String = procs
+                        .iter()
+                        .map(|(pid, cmd, log)| format!("  pid {pid}  {cmd}\n     log: {log}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.chat_messages.push(ChatMessage::System(format!(
+                        "Background processes ({}):\n{list}\n  /stop <pid> | /stop all",
+                        procs.len()
+                    )));
+                }
+            }
+            "/stop" => {
+                let target = match rest {
+                    "" | "all" => None,
+                    p => match p.parse::<u32>() {
+                        Ok(n) => Some(n),
+                        Err(_) => {
+                            self.chat_messages.push(ChatMessage::System(
+                                "Usage: /stop <pid> | /stop all".into(),
+                            ));
+                            return true;
+                        }
+                    },
+                };
+                let n = tools::stop_background(target);
+                self.chat_messages.push(ChatMessage::System(format!(
+                    "Stopped {n} background process(es)."
+                )));
             }
             _ => {
                 // Try action expansion (expert prompts)
@@ -1060,6 +1299,24 @@ impl App {
         }
     }
 
+    /// Cancel any in-flight LLM call or tool batch and return to Idle.
+    ///
+    /// Resetting `pending_tool_results` ensures results still in flight from the
+    /// cancelled batch are dropped (see [`on_tool_result`]) rather than appended
+    /// out of order or starting a new request.
+    pub fn cancel_operation(&mut self) {
+        self.phase = AgentPhase::Idle;
+        self.streaming_text.clear();
+        self.pending_tool_results = 0;
+        // Abort in-flight work so the local model stops generating right away.
+        if let Some(h) = self.llm_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.tool_task.take() {
+            h.abort();
+        }
+    }
+
     /// Called when Ctrl+C is pressed. Returns true if the app should quit.
     pub fn handle_ctrl_c(&mut self) -> bool {
         if self.ctrl_c_pending {
@@ -1070,8 +1327,7 @@ impl App {
         // First press
         if self.phase != AgentPhase::Idle {
             // Cancel current operation
-            self.phase = AgentPhase::Idle;
-            self.streaming_text.clear();
+            self.cancel_operation();
             self.chat_messages
                 .push(ChatMessage::System("Cancelled.".into()));
             self.scroll_to_bottom();
@@ -1294,6 +1550,18 @@ fn char_idx_to_visual_col(chars: &[char], char_idx: usize) -> usize {
         .sum()
 }
 
+/// Truncate a string at the last char boundary at or before `max_bytes`.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn tool_call_detail(name: &str, args: &serde_json::Value) -> String {
@@ -1303,7 +1571,7 @@ fn tool_call_detail(name: &str, args: &serde_json::Value) -> String {
         "bash" => {
             let cmd = s("command").unwrap_or_default();
             if cmd.len() > 60 {
-                format!("{}...", &cmd[..59])
+                format!("{}...", truncate_str(&cmd, 59))
             } else {
                 cmd
             }

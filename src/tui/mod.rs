@@ -80,6 +80,9 @@ pub async fn run(config: Config, workspace_root: PathBuf, metrics: SharedMetrics
         app.client.model
     )));
 
+    // Detect tool/thinking support and native context up front (non-blocking).
+    app.spawn_capability_detection();
+
     // Create text area for input
     let mut textarea = input_area::new_textarea();
 
@@ -205,8 +208,7 @@ pub async fn run(config: Config, workspace_root: PathBuf, metrics: SharedMetrics
                     (KeyCode::Esc, _) => {
                         if app.phase != AgentPhase::Idle {
                             // Cancel streaming/tool execution
-                            app.phase = AgentPhase::Idle;
-                            app.streaming_text.clear();
+                            app.cancel_operation();
                             app.chat_messages
                                 .push(ChatMessage::System("Cancelled.".into()));
                             app.scroll_to_bottom();
@@ -346,6 +348,15 @@ pub async fn run(config: Config, workspace_root: PathBuf, metrics: SharedMetrics
 
             AppEvent::ToolResult { name, output } => {
                 app.on_tool_result(name, output);
+            }
+
+            AppEvent::CapabilitiesLoaded {
+                model,
+                tools,
+                thinking,
+                context_length,
+            } => {
+                app.apply_capabilities(model, tools, thinking, context_length);
             }
 
             AppEvent::Resize(_, _) => {

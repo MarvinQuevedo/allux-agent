@@ -110,6 +110,15 @@ pub struct ChatRequest<'a> {
     pub tools: Option<&'a [ToolDefinition]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<ChatOptions>,
+    /// Top-level `think` toggle for reasoning-capable models (Qwen3, Gemma3, etc.).
+    /// `Some(false)` disables chain-of-thought for faster tool loops; `None` = model default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
+    /// How long Ollama keeps the model resident after the request (e.g. `"30m"`,
+    /// `"1h"`, `"0"` to unload). Keeping it loaded across tool rounds avoids the
+    /// multi-second reload cost of large local models. `None` = Ollama default (5m).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keep_alive: Option<&'a str>,
 }
 
 /// Ollama model options
@@ -159,6 +168,16 @@ impl ResponseStats {
     pub fn total(&self) -> u32 {
         self.prompt_tokens + self.completion_tokens
     }
+}
+
+/// Response from POST /api/show — used to detect model capabilities up front.
+#[derive(Debug, Deserialize, Default)]
+pub struct ShowResponse {
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// Architecture metadata; keys look like `qwen3.context_length`, etc.
+    #[serde(default)]
+    pub model_info: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Response from GET /api/tags

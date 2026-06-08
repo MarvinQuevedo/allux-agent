@@ -42,6 +42,13 @@ pub enum AppEvent {
         name: String,
         output: String,
     },
+    /// Model capabilities resolved from `/api/show` (detected at startup and on `/model`).
+    CapabilitiesLoaded {
+        model: String,
+        tools: bool,
+        thinking: bool,
+        context_length: Option<u64>,
+    },
     /// Terminal resize.
     Resize(u16, u16),
 }

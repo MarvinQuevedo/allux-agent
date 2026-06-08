@@ -3,7 +3,11 @@
     "allow": [
       "Bash(cargo build:*)",
       "Bash(cargo test:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(pkill -f \"http.server 88\")",
+      "Bash(pkill -f \"tail -f watch.txt\")",
+      "Bash(rm -rf /tmp/allux_realtest /tmp/allux_servertest)",
+      "Bash(touch src/tools/bash.rs)"
     ]
   }
 }

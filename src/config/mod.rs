@@ -20,10 +20,31 @@ pub struct Config {
     /// Token compression mode: "always", "auto", or "manual".
     #[serde(default = "default_compression_mode")]
     pub compression_mode: String,
+    /// Model reasoning toggle: `Some(false)` disables chain-of-thought for faster
+    /// tool loops (default), `Some(true)` forces it, `None` uses the model default.
+    /// Only applied when the model actually supports thinking.
+    #[serde(default = "default_think")]
+    pub think: Option<bool>,
+    /// How long Ollama keeps the model resident after each request (e.g. `"30m"`,
+    /// `"1h"`, `"0"` to unload immediately). Keeping a large local model warm
+    /// across turns avoids its multi-second reload cost. Empty = Ollama default.
+    #[serde(default = "default_keep_alive")]
+    pub keep_alive: String,
 }
 
 fn default_compression_mode() -> String {
     "auto".to_string()
+}
+
+fn default_think() -> Option<bool> {
+    // Benchmarks show reasoning adds latency and can degrade first-tool selection
+    // on local models, so default to off.
+    Some(false)
+}
+
+fn default_keep_alive() -> String {
+    // Large local models cost several seconds to reload; keep them warm between turns.
+    "30m".to_string()
 }
 
 impl Default for Config {
@@ -35,6 +56,8 @@ impl Default for Config {
             model: "llama3.2".into(),
             context_size: 8192,
             compression_mode: default_compression_mode(),
+            think: default_think(),
+            keep_alive: default_keep_alive(),
         }
     }
 }
@@ -112,6 +135,8 @@ mod tests {
             model: "test-model:7b".into(),
             context_size: 4096,
             compression_mode: "always".into(),
+            think: Some(false),
+            keep_alive: "30m".into(),
         };
         original.save_to(&path).unwrap();
 
